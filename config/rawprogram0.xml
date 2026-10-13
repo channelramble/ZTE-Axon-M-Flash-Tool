@@ -1,0 +1,7 @@
+<?xml version="1.0" ?>
+<data>
+  <!--NOTE: Sector size is 512bytes-->
+  <!--ZTE Axon M (Z999 / fujisan): recovery = sectors 1181696..1312767 (64 MB), checked against the phone's GPT.-->
+  <!--The rawprogram0.xml in the original TWRP download used start_sector 210048, which is NOT the recovery partition.-->
+  <program SECTOR_SIZE_IN_BYTES="512" file_sector_offset="0" filename="twrp-3.2.3-0_fujisan.img" label="recovery" num_partition_sectors="131072" physical_partition_number="0" size_in_KB="65536.0" sparse="false" start_byte_hex="0x24100000" start_sector="1181696"/>
+</data>
