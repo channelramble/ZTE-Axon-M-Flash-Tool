@@ -1,0 +1,14 @@
+from pathlib import Path
+import time,json,os
+from capture_test22_adb import ADB,PORT,ROOT,Capture,bounded_process,identity_command,verify_identity,write_text_capture,save_state
+os.umask(0o077)
+out=ROOT/'test22-black-screen-stacks-v1';out.mkdir(exist_ok=False)
+state={'files':{},'read_only':True,'complete':False};save_state(out,state)
+raw,rc,status=bounded_process([str(ADB),'-P',PORT,'devices'],10,65536)
+rows=[x.split() for x in raw.decode().splitlines()[1:] if len(x.split())>=2]
+assert len(rows)==1 and rows[0][1]=='device'
+c=Capture(rows[0][0],time.monotonic()+180)
+b,info=c.remote(identity_command(),4096,10);assert verify_identity(b,info)
+commands=[('watchdog-anr.txt', 'cat /data/anr/anr_2026-10-06-08-14-49-526', 800000, 12), ('watchdog-dropbox.txt', 'zcat /data/system/dropbox/system_server_watchdog@1791274497089.txt.gz', 800000, 12), ('java-live.txt', 'p=$(pidof system_server); case "$p" in ""|*[!0-9]*) exit 2;; esac; debuggerd -j "$p"', 1000000, 35)]
+for name,command,cap,seconds in commands:write_text_capture(c,out,state,name,command,cap,seconds)
+state['complete']=True;save_state(out,state);print('Black-screen capture complete',flush=True)

@@ -1,0 +1,110 @@
+#!/usr/bin/env python3
+"""One normal reboot of the verified adb-only reader; inspect the new boot."""
+import json
+import os
+from pathlib import Path
+import subprocess
+import time
+import uuid
+
+from adb_recovery_control import AdbRecovery, digest, save_state
+from fujisan_image import BootImage, cpio_entries, gzip_member
+
+ROOT = Path(__file__).resolve().parent
+EXPECTED = 'dbefa370bc3014c2931ac9d940fc9417ee5f7bbf99fe5e3d865a9f59d0139b2e'
+
+
+def main():
+    os.umask(0o077)
+    transaction = json.loads((ROOT / 'reader-boot-adb-only/transaction.json').read_text())
+    if not (transaction['phase'] == 'complete' and transaction['readback_verified']
+            and transaction['misc_unchanged'] and transaction['recovery_unchanged']
+            and transaction['image_sha256'] == EXPECTED):
+        raise ValueError('Expected a complete verified adb-only boot write')
+    readback = (ROOT / 'reader-boot-adb-only/boot-after.bin').read_bytes()
+    if digest(readback) != transaction['full_boot_sha256']:
+        raise ValueError('Saved full boot readback differs')
+    data = (ROOT / 'reader-3.2.3-boot-adb-only.img').read_bytes()
+    if digest(data) != EXPECTED:
+        raise ValueError('Candidate changed')
+    if len(readback) != 67108864 or readback[:len(data)] != data:
+        raise ValueError('Full readback does not contain the pinned candidate')
+    archive = cpio_entries(gzip_member(BootImage(data).ramdisk)[1])
+    wanted = {'/' + name.removeprefix('./'): digest(content)
+              for name, fields, content, encoded in archive
+              if name.removeprefix('./') in ('prop.default', 'init.recovery.usb.rc')}
+    output = ROOT / 'reader-boot-adb-only-reboot'
+    output.mkdir(mode=0o700, exist_ok=False)
+    state_path = output / 'reboot-result.json'
+    state = {'normal_reboot_attempted': False, 'reboot_command_completed': False,
+             'new_boot_observed': False, 'adb_only_verified': False}
+    save_state(state_path, state)
+    client = AdbRecovery(Path.home() / '.local/share/axon-m-edl/platform-tools-29.0.6/adb',
+                         output, time.monotonic() + 180)
+    try:
+        client.identity()
+        serial = client.serial
+        before = client.shell('cat /proc/sys/kernel/random/boot_id', 'boot-id-before')
+        if str(uuid.UUID(before)) != before:
+            raise ValueError('Invalid initial boot ID')
+        state['normal_reboot_attempted'] = True
+        save_state(state_path, state)
+        try:
+            client._run(['reboot'], 'REBOOT-normal-once')
+            state['reboot_command_completed'] = True
+        except (RuntimeError, TimeoutError) as exc:
+            state['reboot_command_error'] = str(exc).replace(serial, '<bound-device>')
+        save_state(state_path, state)
+        print('One normal reboot attempted; monitoring without retry.', flush=True)
+        started = time.monotonic()
+        previous_states = None
+        while time.monotonic() - started < 55:
+            result = subprocess.run([client.adb, '-P', '5038', 'devices'],
+                                    capture_output=True, timeout=10)
+            states = [line.split()[1] for line in result.stdout.decode(errors='replace').splitlines()[1:]
+                      if len(line.split()) >= 2]
+            if states != previous_states:
+                print(json.dumps({'elapsed_seconds': round(time.monotonic() - started, 1),
+                                  'adb_states': states}), flush=True)
+                previous_states = states
+            if states == ['recovery']:
+                try:
+                    after = client.shell('cat /proc/sys/kernel/random/boot_id', 'boot-id-poll')
+                    if str(uuid.UUID(after)) != after:
+                        raise ValueError('Invalid observed boot ID')
+                except (RuntimeError, ValueError):
+                    time.sleep(2)
+                    continue
+                if after != before:
+                    state['new_boot_observed'] = True
+                    break
+            time.sleep(2)
+        if state['new_boot_observed']:
+            client.identity()
+            if client.serial != serial:
+                raise ValueError('Device identity changed across reboot')
+            hashes = client.shell('sha256sum /prop.default /init.recovery.usb.rc', 'ramdisk-file-hashes')
+            actual = {line.split()[1]: line.split()[0] for line in hashes.splitlines()}
+            state['ramdisk_files_match_candidate'] = actual == wanted
+            values = client.shell('getprop persist.sys.usb.config\ngetprop sys.usb.config\ngetprop sys.usb.state\ngetprop mtp.crash_check\ncat /sys/class/android_usb/android0/functions',
+                                  'usb-state').splitlines()
+            if len(values) != 5:
+                raise ValueError('Incomplete runtime USB state')
+            state['usb'] = dict(zip(('persist_config', 'config', 'state', 'mtp_startup_guard', 'functions'), values))
+            state['adb_only_verified'] = (actual == wanted and values[:3] == ['adb', 'adb', 'adb']
+                                           and values[4] in ('adb', 'ffs'))
+            client.make_workspace()
+            for name, cmd in (('dmesg.txt', 'dmesg'), ('recovery.log', 'cat /tmp/recovery.log')):
+                remote = client.workspace + '/' + name
+                client.shell(cmd + ' > ' + remote, 'capture-' + name)
+                client._run(['pull', remote, str(output / name)], 'pull-' + name)
+        save_state(state_path, state)
+        print(json.dumps(state), flush=True)
+    except BaseException as exc:
+        state['error'] = type(exc).__name__ + ': ' + str(exc).replace(client.serial or '<none>', '<bound-device>')
+        save_state(state_path, state)
+        raise
+
+
+if __name__ == '__main__':
+    main()

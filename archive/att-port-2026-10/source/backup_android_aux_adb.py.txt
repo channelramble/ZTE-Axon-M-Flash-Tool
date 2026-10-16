@@ -1,0 +1,49 @@
+#!/usr/bin/env python3
+"""Read-only fixed-partition backups; no mounts, resets or phone writes."""
+from pathlib import Path
+import datetime, gzip, hashlib, json, os, subprocess
+
+ROOT = Path(__file__).resolve().parent
+ADB = str(Path.home()/'.local/share/axon-m-edl/platform-tools-29.0.6/adb')
+PARTITIONS = [('persist',37,18561048,65536), ('dcmlog',47,18878464,204800)]
+os.umask(0o077)
+r=subprocess.run([ADB,'-P','5038','devices'],capture_output=True,text=True,check=True,timeout=10)
+rows=[l.split() for l in r.stdout.splitlines()[1:] if len(l.split())>=2]
+assert len(rows)==1 and rows[0][1] in ('device','recovery')
+base=[ADB,'-P','5038','-s',rows[0][0],'exec-out']
+def cmd(s,timeout=15):
+    return subprocess.check_output(base+['sh','-c',s],timeout=timeout).decode().strip()
+assert cmd('id -u')=='0'
+mounts=cmd('cat /proc/mounts').splitlines()
+for name,index,start,sectors in PARTITIONS:
+    node=f'mmcblk0p{index}'
+    assert cmd(f'cat /sys/class/block/{node}/start')==str(start)
+    assert cmd(f'cat /sys/class/block/{node}/size')==str(sectors)
+    assert cmd(f'cat /sys/class/block/{node}/dev')=={37:'259:5',47:'259:15'}[index]
+    assert all(node not in line.split()[0] and line.split()[1]!=f'/{name}' for line in mounts)
+out=ROOT/'android-aux-adb-backup';out.mkdir(mode=0o700,exist_ok=False)
+state={'complete':False,'phone_writes':False,'resets':False,'partitions':{},'started_at':datetime.datetime.now(datetime.timezone.utc).isoformat()}
+def save():
+    temp=out/'backup.json.tmp';temp.write_text(json.dumps(state,indent=2)+'\n');temp.replace(out/'backup.json')
+save()
+for name,index,start,sectors in PARTITIONS:
+    size=sectors*512;h=hashlib.sha256();n=0;dest=out/(name+'.bin.gz')
+    with dest.open('xb') as f,(out/(name+'.stderr')).open('xb') as err:
+        p=subprocess.Popen(base+['cat',f'/dev/block/mmcblk0p{index}'],stdout=subprocess.PIPE,stderr=err)
+        try:
+            with gzip.GzipFile(fileobj=f,mode='wb',compresslevel=1,mtime=0) as z:
+                for b in iter(lambda:p.stdout.read(1048576),b''):
+                    n+=len(b);assert n<=size;h.update(b);z.write(b)
+            assert p.wait(timeout=15)==0 and n==size
+            f.flush();os.fsync(f.fileno())
+        finally:
+            if p.poll() is None:p.kill();p.wait()
+    saved=hashlib.sha256();count=0
+    with gzip.open(dest,'rb') as f:
+        for b in iter(lambda:f.read(1048576),b''):saved.update(b);count+=len(b)
+    assert count==size and saved.hexdigest()==h.hexdigest()
+    assert cmd(f'sha256sum /dev/block/mmcblk0p{index}',timeout=60).split()[0]==h.hexdigest()
+    state['partitions'][name]={'index':index,'start_sector':start,'sectors':sectors,'bytes':n,'raw_sha256':h.hexdigest(),'compressed_bytes':dest.stat().st_size,'saved_copy_verified':True,'fresh_source_hash_verified':True}
+    save();print(json.dumps({'partition':name,'backup_verified':True,'compressed_bytes':dest.stat().st_size}),flush=True)
+state['complete']=True;state['finished_at']=datetime.datetime.now(datetime.timezone.utc).isoformat();save()
+print(json.dumps({'complete':True,'phone_writes':False}),flush=True)

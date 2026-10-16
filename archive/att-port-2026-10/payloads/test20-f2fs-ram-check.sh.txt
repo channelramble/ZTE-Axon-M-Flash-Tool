@@ -1,0 +1,58 @@
+#!/system/bin/sh
+# Capability check ONLY: regular file on tmpfs, never a phone partition.
+set -eu
+PATH=/system/bin
+export PATH
+umask 077
+DIR=/tmp/axon-f2fs-compat20
+IMG=$DIR/scratch.img
+MNT=$DIR/mount
+LOOP=
+MOUNTED=0
+tmp_ok=0
+while IFS=' ' read -r dev point fs rest; do
+    if [ "$point" = /tmp ] && [ "$fs" = tmpfs ]; then tmp_ok=1; fi
+done < /proc/mounts
+[ "$tmp_ok" = 1 ]
+[ ! -e "$DIR" ] && [ ! -L "$DIR" ]
+mkdir "$DIR"
+cleanup() {
+    result=$?
+    trap - EXIT
+    if [ "$MOUNTED" = 1 ]; then
+        umount "$MNT" || { echo CLEANUP_UNMOUNT_FAILED; exit 80; }
+    fi
+    if [ -n "$LOOP" ]; then
+        name=${LOOP##*/}
+        if [ -f /sys/class/block/$name/loop/backing_file ]; then
+            [ "$(cat /sys/class/block/$name/loop/backing_file)" = "$IMG" ] || exit 81
+            losetup -d "$LOOP" || exit 82
+        else
+            # The mount tool may mark the loop autoclear and detach on umount.
+            [ -z "$(losetup -j "$IMG")" ] || exit 84
+        fi
+    fi
+    rm -f "$IMG"
+    rmdir "$MNT" "$DIR" || exit 83
+    echo SCRATCH_CLEANUP_COMPLETE
+    exit "$result"
+}
+mkdir "$MNT"
+trap cleanup EXIT
+truncate -s 268435456 "$IMG"
+[ -f "$IMG" ] && [ ! -L "$IMG" ] && [ ! -b "$IMG" ]
+make_f2fs -t 0 -r -T 0 "$IMG"
+LOOP=$(losetup -f -s "$IMG")
+case "$LOOP" in /dev/block/loop[0-9]*) ;; *) exit 21 ;; esac
+name=${LOOP##*/}
+[ "$(cat /sys/class/block/$name/loop/backing_file)" = "$IMG" ]
+[ "$(cat /sys/class/block/$name/size)" = 524288 ]
+mount -t f2fs -o nosuid,nodev,noexec,noatime,discard,resuid=1000,resgid=1000 "$LOOP" "$MNT"
+MOUNTED=1
+printf 'axon-test20-f2fs-ram-capability\n' > "$MNT/probe"
+[ "$(cat "$MNT/probe")" = axon-test20-f2fs-ram-capability ]
+echo F2FS_KERNEL_MOUNT_AND_IO_PASSED
+umount "$MNT"
+MOUNTED=0
+fsck.f2fs --dry-run "$IMG"
+echo F2FS_DRY_RUN_CHECK_PASSED

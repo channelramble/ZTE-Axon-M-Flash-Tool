@@ -1,0 +1,185 @@
+#!/usr/bin/env python3
+"""Prepare original 4.4 TWRP with AT&T DT fixes and reader-compatible pstore."""
+import hashlib
+import json
+import os
+from pathlib import Path
+import sys
+
+sys.dont_write_bytecode = True
+ROOT = Path(__file__).resolve().parent
+sys.path.insert(0, str(ROOT.parent / "ZTE-Axon-M-Flash-Tool/scripts"))
+from fujisan_image import BootImage, Fdt, kernel_dtbs, patch_charger, report, sign_image
+
+PUBLISHED_SHA = "5ac07a8e91bd292e829aac9581486cf73b57b6faa0cb02cf1294de7f91d3bcec"
+BASELINE_SHA = "32804ee3cffe4fe1d23dbfa7ac204b4522b0f906579754a8ea37eed34cc5a522"
+RAW_KERNEL_SHA = "e650ef8942497ccb9dd4783c9c2a2587ccafa266e67a7480a6724f3e27edca4a"
+
+
+def sha(data):
+    return hashlib.sha256(data).hexdigest()
+
+
+def require(condition, message):
+    if not condition:
+        raise ValueError(message)
+
+
+def flatten(node, parent=""):
+    here = parent + "/" + node.name if node.name else ""
+    result = {(here or "/", key): value for key, value in node.props.items()}
+    for child in node.children:
+        result.update(flatten(child, here))
+    return result
+
+
+def u64(value):
+    return value.to_bytes(8, "big")
+
+
+def reg(address, size):
+    return u64(address) + u64(size)
+
+
+def main():
+    os.umask(0o077)
+    source = ROOT / "prepared/twrp-3.7.0-att-charger-boot.img"
+    published_path = ROOT / "TWRP-3.7.0_9-O-fujisan-20260809.img"
+    target = ROOT / "prepared/twrp-3.7.0-att-logged-recovery.img"
+    validation_path = target.with_suffix(".validation.json")
+    inspection_path = target.with_suffix(".img.json")
+    require(not any(path.exists() for path in (target, validation_path, inspection_path)),
+            "Refusing to overwrite existing logged baseline artifacts")
+    baseline_data, published_data = source.read_bytes(), published_path.read_bytes()
+    require(sha(baseline_data) == BASELINE_SHA, "Unexpected charger baseline image")
+    require(sha(published_data) == PUBLISHED_SHA, "Unexpected published image")
+    boot, published = BootImage(baseline_data), BootImage(published_data)
+    baseline_info = report(baseline_data)
+    require(baseline_info["boot_id_valid"] and baseline_info["signature_verified"],
+            "Invalid baseline image")
+    compressed, raw, trees = kernel_dtbs(boot.kernel)
+    pub_compressed, pub_raw, pub_trees = kernel_dtbs(published.kernel)
+    require(compressed == pub_compressed and raw == pub_raw and sha(raw) == RAW_KERNEL_SHA,
+            "Baseline kernel code or gzip differs from published kernel")
+    require(boot.ramdisk == patch_charger(published.ramdisk),
+            "Baseline ramdisk contains changes beyond the charger action")
+    require(boot.cmdline == published.cmdline + " ignore_loglevel initcall_debug",
+            "Unexpected baseline command line")
+    require(len(boot.cmdline.encode("ascii")) < 512 and not any(boot.header[608:1632]),
+            "Command line extends beyond the first header field")
+    require(len(trees) == len(pub_trees) == 2, "Expected two appended device trees")
+    blobs, changes = [], []
+    for index, ((old_blob, tree), (pub_blob, _)) in enumerate(zip(trees, pub_trees)):
+        expected_fixed = Fdt(pub_blob)
+        expected_fixed.add_att_reservation()
+        before = flatten(tree.root)
+        require(before == flatten(expected_fixed.root),
+                "Baseline DT differs from published DT plus AT&T reservation")
+        soc = tree.root.child("soc")
+        reserved = tree.root.child("reserved-memory")
+        require(soc is not None and reserved is not None, "Missing DT root nodes")
+        ramoops = soc.child("ramoops")
+        region = reserved.child("ramoops_region@bfc00000")
+        unused = reserved.child("ramoops_unused@bfd40000")
+        require(ramoops is not None and region is not None and unused is not None,
+                "Missing known ramoops nodes")
+        require(ramoops.props == {
+            "compatible": b"ramoops\0",
+            "memory-region": region.props["phandle"],
+            "console-size": u64(0xc0000),
+            "record-size": u64(0x8000),
+            "ftrace-size": u64(0x40000),
+        }, "Unexpected baseline ramoops configuration")
+        require(region.props["reg"] == reg(0xbfc00000, 0x140000)
+                and region.props.get("no-map") == b"", "Unexpected ramoops reservation")
+        require(unused.props == {
+            "compatible": b"removed-dma-pool\0", "no-map": b"",
+            "reg": reg(0xbfd40000, 0x2c0000),
+        }, "Unexpected adjacent unused reservation")
+        expected = dict(before)
+        for key, value in (("console-size", u64(0x80000)),
+                           ("ftrace-size", u64(0)), ("pmsg-size", u64(0x40000))):
+            ramoops.props[key] = value
+            expected[("/soc/ramoops", key)] = value
+        region.props["reg"] = reg(0xbfc00000, 0x100000)
+        expected[("/reserved-memory/ramoops_region@bfc00000", "reg")] = region.props["reg"]
+        old_unused_path = "/reserved-memory/ramoops_unused@bfd40000"
+        new_unused_path = "/reserved-memory/ramoops_unused@bfd00000"
+        for key in unused.props:
+            expected[(new_unused_path, key)] = expected.pop((old_unused_path, key))
+        unused.name = "ramoops_unused@bfd00000"
+        unused.props["reg"] = reg(0xbfd00000, 0x300000)
+        expected[(new_unused_path, "reg")] = unused.props["reg"]
+        new_blob = tree.serialize(free=8192)
+        after = flatten(Fdt(new_blob).root)
+        require(after == expected, "Unexpected semantic DT change")
+        diff = [
+            {"node": path, "property": key,
+             "before_hex": before[(path, key)].hex() if (path, key) in before else None,
+             "after_hex": after[(path, key)].hex() if (path, key) in after else None}
+            for path, key in sorted(before.keys() | after.keys())
+            if before.get((path, key)) != after.get((path, key))
+        ]
+        blobs.append(new_blob)
+        changes.append({"dt_index": index, "source_sha256": sha(old_blob),
+                        "sha256": sha(new_blob), "semantic_changes": diff})
+    signed = sign_image(boot.rebuild(kernel=compressed + b"".join(blobs)), "/recovery",
+                        str(ROOT / "keys/axon-m-local.key"),
+                        str(ROOT / "keys/axon-m-local.pem"))
+    final = BootImage(signed)
+    final_compressed, final_raw, final_trees = kernel_dtbs(final.kernel)
+    require(final_compressed == pub_compressed and final_raw == pub_raw,
+            "Published kernel changed in final image")
+    require([blob for blob, _ in final_trees] == blobs, "Final DT roundtrip mismatch")
+    require(final.ramdisk == boot.ramdisk and final.cmdline == boot.cmdline
+            and final.second == boot.second, "Unexpected non-DT section change")
+    old_header, new_header = bytearray(boot.header), bytearray(final.header)
+    for start, end in ((8, 12), (576, 608)):
+        old_header[start:end] = new_header[start:end] = b"\0" * (end - start)
+    require(old_header == new_header, "Header changed outside kernel size and ID")
+    info = report(signed)
+    require(info["signature_verified"] and info["boot_id_valid"]
+            and info["signature_target"] == "/recovery"
+            and info["boot_id_style"] == "qcom-dt-size"
+            and all(item["free_tail_bytes"] == 8192 for item in info["dtbs"]),
+            "Final signature/ID/DT validation failed")
+    validation = {
+        "source_image": source.name, "source_sha256": BASELINE_SHA,
+        "published_image": published_path.name, "published_sha256": PUBLISHED_SHA,
+        "image": target.name, "image_bytes": len(signed), "image_sha256": sha(signed),
+        "padded_bytes": len(signed) + (-len(signed) % 512),
+        "padded_sha256": sha(signed + b"\0" * (-len(signed) % 512)),
+        "published_kernel_code_and_gzip_unchanged": True,
+        "kernel_raw_sha256": sha(final_raw), "kernel_gzip_sha256": sha(final_compressed),
+        "ramdisk_identical_to_charger_baseline": True,
+        "ramdisk_only_charger_action_added_to_published": True,
+        "ramdisk_sha256": sha(final.ramdisk),
+        "cmdline": final.cmdline, "cmdline_bytes": len(final.cmdline.encode("ascii")),
+        "extra_cmdline_field_empty": True, "initcall_blacklist": [],
+        "qsee_patch": False, "qce_disabled": False, "blue_led_marker": False,
+        "dt_changes_relative_to_fixed_charger_baseline": changes,
+        "overall_pstore_reserved_range": ["0xbfc00000", "0xc0000000"],
+        "overall_reserved_range_unchanged": True,
+        "ramoops": {"mem_address": "0xbfc00000", "mem_size": "0x100000",
+                    "record_size": "0x8000", "record_count": 8,
+                    "console_address": "0xbfc40000", "console_size": "0x80000",
+                    "pmsg_address": "0xbfcc0000", "pmsg_size": "0x40000",
+                    "ftrace_size": 0, "ecc_size": 0},
+        "signature_target": "/recovery", "signature_verified": True,
+        "boot_id_valid": True, "boot_id_style": info["boot_id_style"],
+        "hardware_tested": False,
+        "requires_before_use": "Prove marked 3.18 recovery selection and RAM-preserving return to the untouched boot reader. Never leave boot-recovery BCB set with an unbootable recovery.",
+        "interpretation": "Original published 4.4 kernel with initcall logging and current-reader-compatible ramoops. Console registers before level6 if its probe succeeds, with printk replay. No MMU-off entry marks or pre-registration crash guarantee. Read pstore immediately after a RAM-preserving return; EDL destroys it."
+    }
+    with target.open("xb") as handle:
+        handle.write(signed)
+    for path, contents in ((validation_path, validation), (inspection_path, info)):
+        with path.open("x") as handle:
+            json.dump(contents, handle, indent=2)
+            handle.write("\n")
+    print(json.dumps({key: value for key, value in validation.items()
+                      if key != "dt_changes_relative_to_fixed_charger_baseline"}, indent=2))
+
+
+if __name__ == "__main__":
+    main()

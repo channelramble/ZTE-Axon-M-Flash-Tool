@@ -1,0 +1,66 @@
+#!/usr/bin/env python3
+"""Local-only append of independent bounded runtime-log services to Test15."""
+from pathlib import Path
+import gzip,hashlib,json,os,stat,sys
+ROOT=Path(__file__).resolve().parent
+sys.path.insert(0,str(ROOT.parent/'ZTE-Axon-M-Flash-Tool/scripts'))
+from fujisan_image import BootImage,cpio_entries,gzip_member,report,sign_image
+SHA=lambda b:hashlib.sha256(b).hexdigest()
+SOURCE_SHA='66737d4e93f3387bfbaee67b197916577b54b311b778cad5475264a0b70d6334'
+
+def encode(name,fields,content):
+ fields=list(fields);fields[6]=len(content);fields[11]=len(name.encode())+1;fields[12]=0
+ head=b'070701'+''.join(f'{x:08x}' for x in fields).encode()+name.encode()+b'\0'
+ out=head+b'\0'*(-len(head)%4)+content
+ return out+b'\0'*(-len(out)%4)
+
+def main():
+ os.umask(0o077)
+ src=ROOT/'prepared/test-15-after-async-green-boot-adb-only.img';dst=ROOT/'prepared/test-16-runtime-logs-boot-adb-only.img'
+ assert not dst.exists()
+ data=src.read_bytes();assert SHA(data)==SOURCE_SHA
+ boot=BootImage(data);_,raw,tail=gzip_member(boot.ramdisk);assert not tail
+ entries=cpio_entries(raw);names={e[0] for e in entries};assert 'init.rc' in names
+ additions={
+  'sbin/axon-diag-collect.sh':(ROOT/'test16-collect.sh').read_bytes(),
+  'sbin/axon-diag-persist.sh':(ROOT/'test16-persist.sh').read_bytes(),
+ }
+ pin=json.loads((ROOT/'hardware-tests/test16-cache-before/local-verification.json').read_text())
+ assert pin['full_cache_backup_verified_on_both_macs'] and pin['bytes']==1718616064
+ import uuid
+ pinned_uuid=str(uuid.UUID(pin['cache_uuid']))
+ persister=additions['sbin/axon-diag-persist.sh']
+ assert persister.count(b'__AXON_CACHE_UUID__')==1
+ additions['sbin/axon-diag-persist.sh']=persister.replace(b'__AXON_CACHE_UUID__',pinned_uuid.encode())
+ snippet=(ROOT/'test16-init.rc').read_bytes()
+ assert b'axon-diag' in snippet and all(n not in names for n in additions)
+ packed=bytearray();next_inode=max(e[1][0] for e in entries)+1
+ for name,fields,content,original in entries:
+  if name=='init.rc':
+   assert b'axon-diag' not in content
+   packed+=encode(name,fields,content.rstrip(b'\n')+b'\n\n'+snippet)
+  elif name=='TRAILER!!!':
+   for n,c in additions.items():
+    fields_new=[next_inode,stat.S_IFREG|0o700,0,0,1,0,len(c),0,0,0,0,len(n)+1,0]
+    packed+=encode(n,fields_new,c);next_inode+=1
+   packed+=original
+  else:packed+=original
+ packed+=b'\0'*(-len(packed)%512)
+ newram=gzip.compress(bytes(packed),compresslevel=9,mtime=0)
+ signed=sign_image(boot.rebuild(ramdisk=newram),'/boot',str(ROOT/'keys/axon-m-local.key'),str(ROOT/'keys/axon-m-local.pem'))
+ new=BootImage(signed);assert new.kernel==boot.kernel and new.cmdline==boot.cmdline and boot.rebuild(ramdisk=new.ramdisk)==new.payload
+ parsed={n:(f,c) for n,f,c,e in cpio_entries(gzip.decompress(new.ramdisk))}
+ assert set(parsed)==names|set(additions)
+ for n,f,c,e in entries:
+  if n!='init.rc':assert parsed[n]==(f,c)
+ for n,c in additions.items():assert parsed[n][1]==c and parsed[n][0][1]==stat.S_IFREG|0o700
+ info=report(signed);assert info['signature_verified'] and info['boot_id_valid'] and info['signature_target']=='/boot'
+ v={'source_sha256':SOURCE_SHA,'image_sha256':SHA(signed),'image_bytes':len(signed),'padded_sha256':SHA(signed+b'\0'*(-len(signed)%512)),
+    'kernel_exact_to_test15':True,'cmdline_exact_to_test15':True,'ramdisk_changed_files':['init.rc',*additions],
+    'added_files_sha256':{n:SHA(c) for n,c in additions.items()},'init_snippet_sha256':SHA(snippet),'all_other_ramdisk_entries_exact':True,
+    'signature_verified':True,'boot_id_valid':True,'requires_full_verified_cache_backup_before_boot':True,'hardware_tested':False}
+ v['verified_cache_backup_sha256']=pin['raw_sha256']
+ for p,b in [(dst,signed),(dst.with_suffix('.validation.json'),(json.dumps(v,indent=2)+'\n').encode()),(dst.with_suffix('.img.json'),(json.dumps(info,indent=2)+'\n').encode())]:
+  with p.open('xb') as f:f.write(b)
+ print(json.dumps(v,indent=2))
+if __name__=='__main__':main()

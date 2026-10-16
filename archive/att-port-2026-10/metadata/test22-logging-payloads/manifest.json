@@ -1,0 +1,58 @@
+{
+  "passed": true,
+  "files": [
+    {
+      "filesystem_path": "/system/etc/init/hw/init.rc",
+      "payload_file": "system__etc__init__hw__init.rc",
+      "original_sha256": "2bb5305bc450c032e84a0afb2c28e34801627fdf7a3b9965967d63925ae1f819",
+      "sha256": "54b68ef6f916ea888148665a0fd18b57ad9106f28f41e1686baea0eaf3876a69",
+      "bytes": 59871,
+      "changed_bytes": 19426
+    },
+    {
+      "filesystem_path": "/system/etc/axon-diag-test20-collect.sh",
+      "payload_file": "system__etc__axon-diag-test20-collect.sh",
+      "original_sha256": "00f32d09dd3e2a9629c68fd22e3c1db145ee828a1771135e4a27cc3ff6d41560",
+      "sha256": "42b5c0e9d24dba1195e9c556422c0d5d8df47c339bb82dcfd55b62335dc17bfe",
+      "bytes": 6985,
+      "changed_bytes": 4
+    },
+    {
+      "filesystem_path": "/system/etc/axon-diag-test20-persist.sh",
+      "payload_file": "system__etc__axon-diag-test20-persist.sh",
+      "original_sha256": "b64797ddae3688a1a6fc25a26996b1593ba184128f8e5fae903dd6acd76b262e",
+      "sha256": "34082cdeba9965d2b89b9062c84debbd70d776698513bf0b075a976e3062f374",
+      "bytes": 3445,
+      "changed_bytes": 4
+    },
+    {
+      "filesystem_path": "/system/etc/init/axon-diag-test20.rc",
+      "payload_file": "system__etc__init__axon-diag-test20.rc",
+      "original_sha256": "dc39d3f3df26d3245f526a173bd7d1721fe2b5cb177ced8788c2b8164e634b75",
+      "sha256": "a50ae2ff6de6fe962a4c7688c271da3921067c8169e73d7e9e5da34a2d0a4310",
+      "bytes": 438,
+      "changed_bytes": 72
+    }
+  ],
+  "phone_operations": false,
+  "image_assembled_or_modified": false,
+  "source": "/EXAMPLE/WORKSPACE/.axon-m-private/test20-system-v1/system.img",
+  "source_system_image_sha256_from_verified_manifest": "7c32f735219768f31444400c67cf996b5f80de4c17d0d1c1ed65a7d0acf0883a",
+  "runtime_identity": "Test22; /dev/axon-diag-test22 and /cache/axon-diag-test22",
+  "physical_file_paths": "Retained Test20 filenames and inodes; SELF/service paths remain valid.",
+  "timing": "Only save-start moves from early-init to the first command in main on post-fs, before vdc checkpoint IPC. Collector still immediately follows first perform_apex_config.",
+  "preserved": [
+    "all other init command ordering",
+    "28 bounded RAM jobs and snapshot timing",
+    "fixed cache geometry/UUID/ext4/writable-mount checks",
+    "exclusive new destination and file caps/hash checks",
+    "no logger mount/format/fsck"
+  ],
+  "evidence": "Test20 persister starts7.462s; cache fs_mgr mount completes8.563676s. Snapshot01 at7.70s lacks cache, snapshots02\u201304 have it.",
+  "limits": [
+    "If fs/mount_all fails, the existing strict persister still rejects.",
+    "Gate runs once; future remount/namespace changes are not repaired by logger.",
+    "Next image builder must preserve original inode metadata/xattrs and verify exact input/output hashes.",
+    "Runtime timing fix is prepared, not hardware-tested."
+  ]
+}

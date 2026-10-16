@@ -1,0 +1,139 @@
+#!/usr/bin/env python3
+"""One recovery reboot after verified control write; capture the actual route."""
+import hashlib
+import json
+import os
+from pathlib import Path
+import secrets
+import shlex
+import subprocess
+import tarfile
+import time
+import uuid
+
+from adb_recovery_control import AdbRecovery, BACKUPS, digest, file_hash, save_state
+
+ROOT = Path(__file__).resolve().parent
+EXPECTED = '6850d87358bb4d46861b83a4c9f88b0fe57e41e6aa0f542e0e615e1b90bcf56b'
+IMAGE_BYTES = 23430199
+LABEL = 'recovery-control-20261016'
+
+
+def main():
+    os.umask(0o077)
+    written = ROOT / 'reader-recovery-control'
+    transaction = json.loads((written / 'transaction.json').read_text())
+    if not (transaction['phase'] == 'complete' and transaction['readback_verified']
+            and transaction['misc_unchanged'] and transaction['boot_prefix_unchanged']
+            and transaction['image_sha256'] == EXPECTED):
+        raise ValueError('A complete, verified recovery-control write is required')
+    readback = (written / 'recovery-after.bin').read_bytes()
+    if (digest(readback) != transaction['full_recovery_sha256']
+            or digest(readback[:IMAGE_BYTES]) != EXPECTED):
+        raise ValueError('Saved recovery readback changed')
+    output = ROOT / 'reader-recovery-route'
+    output.mkdir(mode=0o700, exist_ok=False)
+    state_path = output / 'route-result.json'
+    state = {'reboot_target': 'recovery', 'reboot_attempted': False,
+             'reboot_command_completed': False, 'new_boot_observed': False,
+             'actual_recovery_marker': False, 'ram_marker_retained': False}
+    save_state(state_path, state)
+    client = AdbRecovery(Path.home() / '.local/share/axon-m-edl/platform-tools-29.0.6/adb',
+                         output, time.monotonic() + 180)
+    try:
+        client.identity()
+        bound_serial = client.serial
+        client.geometry()
+        before_id = client.shell('cat /proc/sys/kernel/random/boot_id', 'boot-id-before')
+        if str(uuid.UUID(before_id)) != before_id:
+            raise ValueError('Invalid initial kernel boot ID')
+        existing = client.shell('if [ -e /fujisan-reader-slot ]; then cat /fujisan-reader-slot; else echo UNMARKED; fi',
+                                'marker-before')
+        if existing != 'UNMARKED':
+            raise ValueError('Expected the unmarked boot reader before testing recovery')
+        client.make_workspace()
+        client.capture('misc', output / 'misc-before.bin')
+        if file_hash(output / 'misc-before.bin') != BACKUPS['misc.bin'][1]:
+            raise ValueError('Misc changed before recovery reboot')
+        marker = 'AXON_READER_ROUTE_' + secrets.token_hex(12)
+        state['kernel_log_marker'] = marker
+        client.shell("printf '%s\\n' " + shlex.quote('<6>' + marker) + ' > /dev/kmsg',
+                     'emit-ram-marker')
+        state['reboot_attempted'] = True
+        save_state(state_path, state)
+        try:
+            client._run(['reboot', 'recovery'], 'REBOOT-recovery-once')
+            state['reboot_command_completed'] = True
+        except (RuntimeError, TimeoutError) as exc:
+            state['reboot_command_error'] = str(exc).replace(bound_serial, '<bound-device>')
+        save_state(state_path, state)
+        print('One adb reboot recovery command attempted; monitoring without retry.', flush=True)
+        started = time.monotonic()
+        previous_states = None
+        while time.monotonic() - started < 55:
+            result = subprocess.run([client.adb, '-P', '5038', 'devices'],
+                                    capture_output=True, timeout=10)
+            lines = result.stdout.decode(errors='replace').splitlines()[1:]
+            states = [x.split()[1] for x in lines if len(x.split()) >= 2]
+            if states != previous_states:
+                print(json.dumps({'elapsed_seconds': round(time.monotonic() - started, 1),
+                                  'adb_states': states}), flush=True)
+                previous_states = states
+            if states == ['recovery']:
+                try:
+                    after_id = client.shell('cat /proc/sys/kernel/random/boot_id', 'boot-id-poll')
+                    if str(uuid.UUID(after_id)) != after_id:
+                        raise ValueError('Invalid observed kernel boot ID')
+                except (RuntimeError, ValueError):
+                    time.sleep(2)
+                    continue
+                if after_id != before_id:
+                    state['new_boot_observed'] = True
+                    break
+            time.sleep(2)
+        if state['new_boot_observed']:
+            client.identity()
+            if client.serial != bound_serial:
+                raise ValueError('ADB device identity changed across reboot')
+            client.geometry()
+            observed = client.shell('if [ -e /fujisan-reader-slot ]; then cat /fujisan-reader-slot; else echo UNMARKED; fi',
+                                    'marker-after')
+            state['actual_recovery_marker'] = observed == LABEL
+            state['observed_ramdisk_marker'] = observed
+            client.make_workspace()
+            client.capture('misc', output / 'misc-after.bin')
+            state['misc_unchanged'] = ((output / 'misc-after.bin').read_bytes()
+                                       == (output / 'misc-before.bin').read_bytes())
+            commands = {
+                'dmesg.txt': 'dmesg', 'cmdline.txt': 'cat /proc/cmdline',
+                'ramoops-layout.txt': 'for f in /sys/module/ramoops/parameters/*; do echo "$f"; cat "$f"; done',
+                'pstore.tar': 'tar -C /sys/fs/pstore -cf - .',
+            }
+            for name, command in commands.items():
+                remote = client.workspace + '/' + name
+                client.shell(command + ' > ' + shlex.quote(remote), 'capture-' + name)
+                client._run(['pull', remote, str(output / name)], 'pull-' + name)
+            with tarfile.open(output / 'pstore.tar') as archive:
+                state['pstore_files'] = []
+                for member in archive.getmembers():
+                    if member.isfile():
+                        data = archive.extractfile(member).read()
+                        retained = marker.encode() in data
+                        state['ram_marker_retained'] |= retained
+                        state['pstore_files'].append({'name': member.name, 'bytes': len(data),
+                                                     'sha256': hashlib.sha256(data).hexdigest(),
+                                                     'marker_retained': retained})
+        save_state(state_path, state)
+        print(json.dumps({key: state[key] for key in
+                          ('reboot_command_completed', 'new_boot_observed',
+                           'actual_recovery_marker', 'ram_marker_retained')}), flush=True)
+        if 'misc_unchanged' in state:
+            print(json.dumps({'misc_unchanged': state['misc_unchanged']}), flush=True)
+    except BaseException as exc:
+        state['error'] = type(exc).__name__ + ': ' + str(exc).replace(client.serial or '<none>', '<bound-device>')
+        save_state(state_path, state)
+        raise
+
+
+if __name__ == '__main__':
+    main()

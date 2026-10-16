@@ -1,0 +1,49 @@
+#!/usr/bin/env python3
+"""Read-only debugfs extraction of explicit recovery/diagnostic logs from a local backup."""
+from pathlib import Path
+import argparse,gzip,hashlib,json,os,re,subprocess
+ROOT=Path(__file__).resolve().parent
+DEBUGFS='/opt/homebrew/opt/e2fsprogs/sbin/debugfs'
+p=argparse.ArgumentParser();p.add_argument('image',type=Path);p.add_argument('--phase',choices=['before','after'],required=True);args=p.parse_args()
+os.umask(0o077)
+image=args.image.resolve();assert image.is_relative_to(ROOT) and image.is_file()
+assert image.stat().st_size==1718616064
+out=ROOT/'hardware-tests'/('test19-cache-extracted-'+args.phase);out.mkdir(mode=0o700,exist_ok=False)
+allowed={f'/recovery/{n}':f'recovery-{n}' for n in ['log','last_log','log.gz','last_log.gz','last_kmsg']}
+for snap in ['01','02','03']:
+ for kind in ['identity','dmesg','recovery','usb','processes','stacks']:
+  n=f'{snap}-{kind}.txt';allowed['/axon-diag-test19/'+n]='diag-'+n
+for n in ['ABOUT.txt','SHA256SUMS','collector.txt','COMPLETE.txt','INCOMPLETE.txt']:
+ allowed['/axon-diag-test19/'+n]='diag-'+n
+manifest={'source_image':str(image),'debugfs_read_only':True,'files':{},'diagnostic_hash_checks':{},'manifest_errors':[]}
+for source,name in allowed.items():
+ stat=subprocess.run([DEBUGFS,'-R','stat '+source,str(image)],capture_output=True,text=True,timeout=15)
+ (out/(name+'.stat.txt')).write_text(stat.stdout+stat.stderr)
+ if not re.search(r'Type:\s+regular\b',stat.stdout):continue
+ match=re.search(r'\bSize:\s+(\d+)',stat.stdout);assert match,source
+ size=int(match.group(1));assert size<=16*1024*1024,source
+ dest=out/name;assert not dest.exists()
+ # Fixed allowlisted paths and controlled private output; no -w or -p flags.
+ cmd='dump '+source+' '+str(dest)
+ result=subprocess.run([DEBUGFS,'-R',cmd,str(image)],capture_output=True,text=True,timeout=20)
+ (out/(name+'.dump.txt')).write_text(result.stdout+result.stderr)
+ assert result.returncode==0 and dest.is_file() and not dest.is_symlink() and dest.stat().st_size==size,source
+ data=dest.read_bytes();manifest['files'][source]={'local_file':name,'bytes':size,'sha256':hashlib.sha256(data).hexdigest()}
+ if name.endswith('.gz'):
+  try:
+   with gzip.open(dest,'rb') as z:plain=z.read(4*1024*1024+1)
+   if len(plain)<=4*1024*1024:(out/(name+'.txt')).write_bytes(plain)
+  except (OSError,EOFError):pass
+sums=out/'diag-SHA256SUMS'
+if sums.exists():
+ for line in sums.read_text().splitlines():
+  fields=line.split()
+  if len(fields)!=2:
+   manifest['manifest_errors'].append('Incomplete checksum line');continue
+  sha,name=fields;source='/axon-diag-test19/'+name
+  if source not in allowed or not re.fullmatch('[0-9a-f]{64}',sha):
+   manifest['manifest_errors'].append('Unrecognized checksum entry');continue
+  dest=out/allowed[source]
+  manifest['diagnostic_hash_checks'][name]=dest.exists() and hashlib.sha256(dest.read_bytes()).hexdigest()==sha
+(out/'extraction.json').write_text(json.dumps(manifest,indent=2)+'\n')
+print(json.dumps({'extracted_log_files':len(manifest['files']),'diagnostic_files_hash_verified':sum(manifest['diagnostic_hash_checks'].values()),'output':str(out)}))

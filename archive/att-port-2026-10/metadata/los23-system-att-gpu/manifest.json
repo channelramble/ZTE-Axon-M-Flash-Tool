@@ -1,0 +1,66 @@
+{
+  "source_sha256": "90aea590dd4921df4bd78ebcdcd6c10d93eebe27e8d70d501d8a59e7f495899d",
+  "image_sha256": "0271379d1402dc727b1c5f4a48333cf3db1f799d86370c19b5cafdecb4846f27",
+  "image_bytes": 6979321856,
+  "files": [
+    {
+      "name": "a530_zap.mdt",
+      "bytes": 6684,
+      "source_sha256": "a1d26571b1cfa8551837e340738b6a701fc88111469c00f96a42001197fa7620",
+      "att_sha256": "e7d41d30e3d23af380207a71acb7a63868b5f6ea715e196867da24c972f9b04e",
+      "data_blocks": [
+        548820,
+        548821
+      ]
+    },
+    {
+      "name": "a530_zap.elf",
+      "bytes": 17188,
+      "source_sha256": "a100cc907493a90e9ff5b0fa951b3e6ec599b5579ec5b44e5aced368fa1cf718",
+      "att_sha256": "666c9e95a4e28fba8482b155217e1cfa25ce23246653e5d16d116037891b7316",
+      "data_blocks": [
+        548815,
+        548816,
+        548817,
+        548818,
+        548819
+      ]
+    },
+    {
+      "name": "a530_zap.b02",
+      "bytes": 4900,
+      "source_sha256": "bef98d709227d3a45d046439c1dc6a7af5ce607df6ba960f99417fb569f5700f",
+      "att_sha256": "bef98d709227d3a45d046439c1dc6a7af5ce607df6ba960f99417fb569f5700f",
+      "data_blocks": [
+        548813,
+        548814
+      ]
+    },
+    {
+      "name": "a530_zap.b01",
+      "bytes": 6536,
+      "source_sha256": "43256c850ce08880b6b34e0641227088878e9edc2181e8eafebf4e7abb9f1a17",
+      "att_sha256": "91c7c24b8605b0b3df0d925c6f6b2091369fab2e9b9696e1ee97eb4dc8eaf820",
+      "data_blocks": [
+        548811,
+        548812
+      ]
+    },
+    {
+      "name": "a530_zap.b00",
+      "bytes": 148,
+      "source_sha256": "1f384b70d68863407d66f2ba328b9b7729ab149b43bbb5d5f7da9e21f9221de2",
+      "att_sha256": "1f384b70d68863407d66f2ba328b9b7729ab149b43bbb5d5f7da9e21f9221de2",
+      "data_blocks": [
+        548810
+      ]
+    }
+  ],
+  "changed_bytes": 7047,
+  "other_image_bytes_exact": true,
+  "all_inode_metadata_xattrs_exact": true,
+  "all_file_readbacks_match_verified_att_captures": true,
+  "read_only_fsck_passed": true,
+  "phone_operations": false,
+  "boot_recovery_coordination_still_required": true
+}

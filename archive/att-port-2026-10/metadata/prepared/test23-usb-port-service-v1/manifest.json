@@ -1,0 +1,31 @@
+{
+  "passed": true,
+  "target": "/vendor/etc/init/android.hardware.usb@1.0-service.rc",
+  "payload": "android.hardware.usb@1.0-service.rc",
+  "source_sha256": "386ee38f0e558cefe689dba87a513d311380d98906a279d2775ec0773987db92",
+  "output_sha256": "77b3cb1253f3c113cc783d298a1e2dd603f14bc56fbe280f8f7b51aa1de37c9f",
+  "bytes": 175,
+  "changed_bytes": 89,
+  "native_path": "/vendor/bin/hw/android.hardware.usb@1.0-service",
+  "native_sha256": "6ef50f071c02fa5e13dd3541cce9c276186f600ea6abb8d18ae00ba7e587968d",
+  "native_bytes": 31576,
+  "source_image_sha256_from_verified_receipt": "508cd08359c6602c36d1bf0a2711dc064bfae509b5773b55933d68ad1f2570a8",
+  "source_image_manifest_sha256": "a93ea60ec36fff5fe4a808777a65826b820f6c9b994d4b661c4fd4c909f01255",
+  "source_inode_metadata_sha256": "63b76c7cac57635b3c717a767b15740a044b0a53a2c08fbcb86d3dcfd7d6d8be",
+  "source_rc_and_native_reextracted_and_verified": true,
+  "whole_source_image_rehash_repeated": false,
+  "restores_exact_published_service_rc": true,
+  "required_assembly": "Same-size inode file-data replacement; preserve all metadata, xattrs and extents",
+  "scope": [
+    "Restore IUsb/default init interface and automatic class hal startup",
+    "No native binary, gadget RC, sys.usb property, MTP, kernel, DT, data or boot changes"
+  ],
+  "phone_operations": false,
+  "system_image_modified": false,
+  "hardware_tested": false,
+  "limits": [
+    "Port query opens role nodes for capability checks but sends no role data",
+    "Actual role changes remain possible through explicit switchRole RPC",
+    "Future framework or hardware failures are not ruled out"
+  ]
+}

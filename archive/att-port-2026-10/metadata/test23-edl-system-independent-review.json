@@ -1,0 +1,50 @@
+{
+  "passed": true,
+  "runner_sha256": "59eb68812b68373ea3d420bc257d69e6b2c13b084f424dfb78673e7eaa12b9f3",
+  "delta_sha256": "8fcfb957f737c58e3510a0d87150121a0805eaa59560ab955b5aa136c9af142b",
+  "source_sha256": "508cd08359c6602c36d1bf0a2711dc064bfae509b5773b55933d68ad1f2570a8",
+  "target_sha256": "33db1d4d4e5e49f5dc1c06cbd6a0e39b07fd9b6d886941e33f165b7876fccc5a",
+  "reviewer": "next_diagnostic_review; root authored Test23 derivation",
+  "runner_diff_scope": "Only source/target/delta pins, one offset, one-block counters and new Test23 paths; transfer/audit/retry logic otherwise unchanged from tested Test22 runner.",
+  "checks": {
+    "exact_delta_and_one_block": true,
+    "actual_source_target_block_hashes_and_89_diffbytes": true,
+    "fixed_system_geometry": true,
+    "only_physical0_program8sectors_at5639288": true,
+    "fresh_full_before_hash_and_bothMac_receipt_required": true,
+    "all_protected_pins_unchanged_including_misc": true,
+    "fresh_live_protected_and_target_source_block_before_write": true,
+    "immediate_exact_block_readback": true,
+    "full_system_after_hash_then_protected_after": true,
+    "exclusive_transaction_dir_and_durable_journal_no_retry": true,
+    "no_erase_reset_other_partition_write": true,
+    "whole_transaction_deadline_and_disk_guard_retained": true,
+    "syntax": true,
+    "eight_USB_execution_mock_tests": true,
+    "twelve_metadata_and_source_checks": true
+  },
+  "metadata_checks": [
+    "valid metadata and exact sparse source/target blocks",
+    "wrong staged source",
+    "wrong staged target",
+    "wrong block count",
+    "unverified second Mac",
+    "wrong full source SHA",
+    "changed misc pin",
+    "wrong system start",
+    "wrong system sectors",
+    "missing full system final ACK",
+    "changed boot pin",
+    "receipt mapping mismatch"
+  ],
+  "program_start_sector": 5639288,
+  "program_sectors": 8,
+  "test_file_sha256": "5a37f2c6d63a7589f78e86010e535992dc8cf6b0164e3b95ecc357ffb4a62cea",
+  "preflight_guards_test_limit": "Metadata tests stub only checked_file to avoid hashing synthetic sparse 7GB fixtures; actual checked_file size/hash/symlink rejection covered by eight USB/execution tests. Actual saved source/candidate delta block independently compared.",
+  "runtime_limitations": [
+    "Fresh Test23 EDL capture and exact source hash still required; this gate does not approve a changed source or current misc.",
+    "No phone connection or device operation performed.",
+    "Full after readback and both-Mac evidence receipt remain mandatory before reset.",
+    "Test22 cache logs are from earlier boot; fresh RAM/live captures must establish Test23 runtime."
+  ]
+}

@@ -1,0 +1,34 @@
+#!/usr/bin/env python3
+"""Private read-only live capture if the diagnostic reaches adb. Never reboots."""
+import hashlib,json,os,shlex,subprocess,time
+from pathlib import Path
+ROOT=Path(__file__).resolve().parent
+ADB=Path.home()/'.local/share/axon-m-edl/platform-tools-29.0.6/adb'
+os.umask(0o077)
+r=subprocess.run([str(ADB),'-P','5038','devices'],capture_output=True,text=True,timeout=10)
+devices=[x.split() for x in r.stdout.splitlines()[1:] if len(x.split())>=2]
+connected=[x for x in devices if x[1] in ('device','recovery')]
+if len(connected)!=1:
+    print(json.dumps({'captured':False,'adb_states':[x[1] for x in devices]}))
+    raise SystemExit(0)
+serial=connected[0][0]
+out=ROOT/'test13-deferred-observability-live'
+out.mkdir(mode=0o700,exist_ok=False)
+captures=[
+ ('dmesg-first.txt','dmesg',15),
+ ('kernel-runtime.txt','uname -a; cat /proc/version; cat /proc/cmdline; cat /proc/uptime; getprop ro.twrp.version; getprop sys.usb.config; getprop sys.usb.state',15),
+ ('tasks.txt','ps -A -T; ps',15),
+ ('worker-stacks.txt','for p in /proc/[0-9]*; do n=$(cat "$p/comm" 2>/dev/null); case "$n" in kworker*|kthreadd|init|swapper*) echo "=== $p $n"; cat "$p/status" "$p/stack" "$p/wchan" 2>/dev/null;; esac; done',25),
+ ('deferred-devices.txt','cat /sys/kernel/debug/devices_deferred 2>/dev/null; cat /proc/locks; cat /proc/meminfo',15),
+ ('dmesg-last.txt','dmesg',15)]
+state={'captured':True,'adb_state':connected[0][1],'files':{}}
+for name,command,timeout in captures:
+    path=out/name
+    with path.open('xb') as f:
+        p=subprocess.Popen([str(ADB),'-P','5038','-s',serial,'exec-out','sh','-c',shlex.quote(command)],stdout=f,stderr=subprocess.STDOUT)
+        try:rc=p.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:p.kill();p.wait();rc='timeout'
+    data=path.read_bytes()
+    state['files'][name]={'bytes':len(data),'sha256':hashlib.sha256(data).hexdigest(),'status':rc}
+    (out/'capture.json').write_text(json.dumps(state,indent=2)+'\n')
+    print(json.dumps({'file':name,'bytes':len(data),'status':rc}),flush=True)

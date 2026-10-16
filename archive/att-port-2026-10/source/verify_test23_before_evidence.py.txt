@@ -1,0 +1,25 @@
+#!/usr/bin/env python3
+from pathlib import Path
+import hashlib,json,subprocess
+ROOT=Path(__file__).resolve().parent
+REMOTE='/EXAMPLE/REMOTE_HOME/.local/share/axon-m-edl/sessions/SESSION_ID/test23-edl-before'
+CONFIG='/EXAMPLE/LOCAL_HOME/.crosstalk/ssh/config'
+out=ROOT/'hardware-tests/test23-edl-before'
+def digest(p):
+ h=hashlib.sha256()
+ with p.open('rb') as f:
+  for chunk in iter(lambda:f.read(4194304),b''):h.update(chunk)
+ return h.hexdigest()
+subprocess.run(['scp','-q','-F',CONFIG,'DEVICE_HOST:'+REMOTE+'/audit.json',str(out/'audit.json')],check=True)
+a=json.loads((out/'audit.json').read_text());assert a['complete'] and not a['writes_sent']
+assert set(a['files'])=={'gpt','boot','recovery','misc','system'}
+s=a['files']['system'];assert s['bytes']==6979321856 and s['sha256']=='508cd08359c6602c36d1bf0a2711dc064bfae509b5773b55933d68ad1f2570a8'
+source=ROOT/'test22-system-v1/system.img';assert source.stat().st_size==s['bytes'] and digest(source)==s['sha256']
+assert not (out/'system.bin').exists()
+subprocess.run(['/bin/cp','-c',str(source),str(out/'system.bin')],check=True)
+for name,item in a['files'].items():
+ p=out/(name+'.bin');assert p.stat().st_size==item['bytes'] and digest(p)==item['sha256'],name
+receipt={'complete':True,'both_macs_verified':True,'files':a['files'],'system_copy_method':'APFS clone of byte-identical local Test22 image, freshly SHA256 matched to full live EDL read and rehashed after cloning'}
+(out/'local-verification.json').write_text(json.dumps(receipt,indent=2)+'\n')
+subprocess.run(['scp','-q','-F',CONFIG,str(out/'local-verification.json'),'DEVICE_HOST:'+REMOTE+'/'],check=True)
+print('Full fresh GPT, boot, recovery, misc, system backup verified on both Macs; receipt returned.')

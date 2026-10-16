@@ -1,0 +1,77 @@
+#!/usr/bin/env python3
+"""Copy completed Test20 installation evidence; verify locally; return receipt."""
+from pathlib import Path
+import datetime, hashlib, json, os, shlex, struct, subprocess
+
+ROOT = Path(__file__).resolve().parent
+OUT = ROOT / 'hardware-tests/test20-install'
+REMOTE = '/EXAMPLE/REMOTE_HOME/.local/share/axon-m-edl/sessions/SESSION_ID/test20-install'
+CONFIG = '/EXAMPLE/LOCAL_HOME/.crosstalk/ssh/config'
+sha = lambda b: hashlib.sha256(b).hexdigest()
+
+def fetch(name):
+    path = OUT / name
+    assert not path.exists() and not path.is_symlink(), name
+    subprocess.run(['scp', '-q', '-F', CONFIG, 'DEVICE_HOST:' + REMOTE + '/' + name, str(path)], check=True, timeout=120)
+    return path.read_bytes()
+
+def main():
+    os.umask(0o077)
+    assert OUT.is_dir() and not OUT.is_symlink()
+    assert not (OUT / 'local-verification.json').exists() and not (OUT / 'local-verification.json').is_symlink()
+    state_bytes = fetch('state.json')
+    state = json.loads(state_bytes)
+    assert state['completed'] == ['recovery', 'system', 'userdata', 'boot', 'final']
+    assert state['started_phase'] is None and state['phone_reset'] is False
+    auth = json.loads((ROOT / 'test20-owner-authorization.json').read_text())
+    assert state['image_sha256'] == auth['image_sha256']
+    assert state['final'] == {'installed_partition_hashes_rechecked': True, 'gpt_misc_persist_dcmlog_unchanged': True, 'reset_performed': False, 'owner_restart_pending': True}
+    fetch('boot-readback.bin')
+    files = {}
+    for name, image_name in [('boot', 'boot.img'), ('recovery', 'recovery-control.img')]:
+        image = (ROOT / 'test20-boot-v1' / image_name).read_bytes()
+        assert sha(image) == auth['image_sha256'][name]
+        before = (ROOT / 'hardware-tests/test20-before-adb' / (name + '.bin')).read_bytes()
+        audit = json.loads((ROOT / 'hardware-tests/test20-before-adb/audit.json').read_text())
+        assert sha(before) == audit['partition_hashes'][name]
+        padded = image + b'\0' * ((-len(image)) % 512)
+        actual = (OUT / (name + '-readback.bin')).read_bytes()
+        assert len(actual) == 67108864 and actual == padded + before[len(padded):]
+        assert sha(actual) == state[name]['full_partition_sha256']
+        assert state[name]['host_full_readback_and_preserved_tail_verified']
+        assert state[name]['full_native_readback_verified']
+        files[name + '-readback.bin'] = {'bytes': len(actual), 'sha256': sha(actual)}
+    assert state['system']['full_partition_sha256'] == auth['image_sha256']['system']
+    assert state['system']['full_native_readback_verified'] and state['system']['written_bytes'] == 6979321856
+    headers = fetch('userdata-superblocks.bin')
+    assert len(headers) == 8192 and headers[1024:4096] == headers[5120:8192]
+    assert struct.unpack_from('<I', headers, 1024)[0] == 0xf2f52010
+    assert struct.unpack_from('<III', headers, 1032) == (9, 3, 12)
+    assert struct.unpack_from('<Q', headers, 1060)[0] == 103059423 // 8
+    assert sha(headers) == state['userdata']['repeated_header_readback_sha256']
+    assert state['userdata']['dry_run_fsck_passed'] and state['userdata']['filesystem_features'] == 0
+    for name in ['system-write.log', 'userdata-format.log', 'boot-write.log', 'recovery.sh', 'system.sh', 'userdata.sh', 'boot.sh']:
+        fetch(name)
+    for phase in ['recovery', 'system', 'boot']:
+        assert 'AXON_TEST20_WRITE_COMPLETE' in (OUT / (phase + '-write.log')).read_text()
+    log = (OUT / 'userdata-format.log').read_text()
+    assert 'AXON_TEST20_FORMAT_AND_FSCK_COMPLETE' in log and '[Fail' not in log and 'superblock features = 0 :' in log
+    for path in OUT.iterdir():
+        if path.is_file():
+            data = path.read_bytes()
+            files[path.name] = {'bytes': len(data), 'sha256': sha(data)}
+    receipt = {'complete': True, 'both_macs_verified': True, 'created_at': datetime.datetime.now(datetime.timezone.utc).isoformat(),
+               'files': files, 'image_sha256': state['image_sha256'], 'boot_recovery_exact_image_and_preserved_tail': True,
+               'system_native_full_hash_verified': True, 'userdata_fsck_and_mirrored_geometry_verified': True,
+               'gpt_misc_persist_dcmlog_unchanged': True, 'reset_performed': False, 'owner_restart_pending': True}
+    dest = OUT / 'local-verification.json'
+    with dest.open('x') as f:
+        f.write(json.dumps(receipt, indent=2) + '\n'); f.flush(); os.fsync(f.fileno())
+    subprocess.run(['scp', '-q', '-F', CONFIG, str(dest), 'DEVICE_HOST:' + REMOTE + '/' + dest.name], check=True, timeout=30)
+    command = 'shasum -a 256 ' + shlex.quote(REMOTE + '/' + dest.name)
+    result = subprocess.check_output(['ssh', '-F', CONFIG, 'DEVICE_HOST', '$SHELL -lc ' + shlex.quote(command)], timeout=30).decode()
+    assert result.split()[0] == sha(dest.read_bytes())
+    print(json.dumps({'complete': True, 'both_macs_verified': True, 'receipt_return_verified': True, 'reset_performed': False}))
+
+if __name__ == '__main__':
+    main()

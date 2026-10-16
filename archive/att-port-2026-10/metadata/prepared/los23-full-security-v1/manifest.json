@@ -1,0 +1,87 @@
+{
+  "diagnostic_only": true,
+  "shared_image_opened_or_modified": false,
+  "entries": [
+    {
+      "filesystem_path": "/system/bin/init",
+      "original_sha256": "b77252effaacb128093e75832fc906ea2c8aa2e2b6558f501c689054035e2b1e",
+      "original_bytes": 2716600,
+      "output_name": "system-bin-init.diagnostic",
+      "output_sha256": "31bfd4ad1cdd17986110499be2a7e60748dbc5f8c3df4a0c692c3f3a2bfc4a18",
+      "output_bytes": 2716600,
+      "changed_byte_offsets": [
+        1127993,
+        1128000
+      ],
+      "original_inode_metadata": {
+        "inode": 401,
+        "uid": 0,
+        "gid": 2000,
+        "mode": "0755",
+        "security_selinux": "u:object_r:init_exec:s0"
+      },
+      "output_path": "/EXAMPLE/WORKSPACE/.axon-m-private/prepared/los23-full-security-v1/system-bin-init.diagnostic"
+    },
+    {
+      "filesystem_path": "/system/build.prop",
+      "original_sha256": "e73527a5b46b08f4ddd6d67d64b6f9e12312061b38fcd7950d8d93dbde0ae479",
+      "original_bytes": 9997,
+      "output_name": "system-build.prop.diagnostic",
+      "output_sha256": "669e957ef4423ce78ba77f961d5f2aee8dce1fdeb658e89763bb3ad773b9fb98",
+      "output_bytes": 9997,
+      "changed_byte_offsets": [
+        7478,
+        7517,
+        7558
+      ],
+      "original_inode_metadata": {
+        "inode": 658,
+        "uid": 0,
+        "gid": 0,
+        "mode": "0600",
+        "security_selinux": "u:object_r:system_file:s0"
+      },
+      "output_path": "/EXAMPLE/WORKSPACE/.axon-m-private/prepared/los23-full-security-v1/system-build.prop.diagnostic"
+    },
+    {
+      "filesystem_path": "/system_ext/etc/build.prop",
+      "original_sha256": "f4635ce5923d6552fcf2ca24bac4ab553bf6562ba64bb8a67b44564e0a4ffbec",
+      "original_bytes": 1037,
+      "output_name": "system_ext-build.prop.diagnostic",
+      "output_sha256": "1e7e7903d60f2587dd8d81741af8c5190c91e4b172a63e5cd465ad49fae4affe",
+      "output_bytes": 1037,
+      "changed_byte_offsets": [
+        1002
+      ],
+      "original_inode_metadata": {
+        "inode": 3625,
+        "uid": 0,
+        "gid": 0,
+        "mode": "0600",
+        "security_selinux": "u:object_r:system_file:s0"
+      },
+      "output_path": "/EXAMPLE/WORKSPACE/.axon-m-private/prepared/los23-full-security-v1/system_ext-build.prop.diagnostic"
+    }
+  ],
+  "own_init_function": {
+    "start": "0x11229c",
+    "end_exclusive": "0x113ce4",
+    "original_sha256": "673f840b42389c17c8d0be91a813cb87d319c1387df3a08a1b35b6548c508cdb"
+  },
+  "init_change": "Compare current SELinux enforcing value with desired0; call security_setenforce(0) only when different. Original error handling, policy load, restorecon and all branches remain.",
+  "property_change": "ro.secure=0, ro.adb.secure=0, ro.debuggable=1; override duplicate ro.adb.secure in system_ext consistently.",
+  "unchanged": [
+    "ro.build.type=user",
+    "signed com.android.adbd APEX",
+    "SELinux policy files",
+    "service rc files",
+    "all filesystem inode metadata/xattrs"
+  ],
+  "limits": [
+    "Full Android runtime not yet tested.",
+    "Permissive/root/unauthenticated adb is temporary diagnostic behavior, not production security.",
+    "Later properties or a different loaded APEX/policy can affect runtime; verify live UID, enforcement, USB and adbd logs.",
+    "No format, installation, userdata operation, or image mutation is performed by this helper."
+  ],
+  "passed": true
+}

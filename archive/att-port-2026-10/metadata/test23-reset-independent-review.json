@@ -1,0 +1,58 @@
+{
+  "passed": true,
+  "scope": "Independent local-only review of Test23 before/after evidence verifiers and one-shot reset; no device, SSH, staging or reset actions performed.",
+  "reset_sha256": "6911cb4e8006d4171ccc2cdab03587e57779d836f553392aefb99f48920217d5",
+  "runner_sha256": "6911cb4e8006d4171ccc2cdab03587e57779d836f553392aefb99f48920217d5",
+  "before_verifier_sha256": "bb4b23219264943bc7373742d64c36ee5526a1895cd880300d9dd01d673c9941",
+  "after_verifier_sha256": "f644934f6c6396726302faf74809adef2ad866a799d2e6c2d6b968048e756bef",
+  "source_system_sha256": "508cd08359c6602c36d1bf0a2711dc064bfae509b5773b55933d68ad1f2570a8",
+  "target_system_sha256": "33db1d4d4e5e49f5dc1c06cbd6a0e39b07fd9b6d886941e33f165b7876fccc5a",
+  "system_bytes": 6979321856,
+  "files": {
+    "verify_test23_before_evidence.py": {
+      "sha256": "bb4b23219264943bc7373742d64c36ee5526a1895cd880300d9dd01d673c9941",
+      "bytes": 1717
+    },
+    "verify_test23_after_evidence.py": {
+      "sha256": "f644934f6c6396726302faf74809adef2ad866a799d2e6c2d6b968048e756bef",
+      "bytes": 2811
+    },
+    "reset_test23_verified.py": {
+      "sha256": "6911cb4e8006d4171ccc2cdab03587e57779d836f553392aefb99f48920217d5",
+      "bytes": 2819
+    },
+    "test_test23_reset_guards.py": {
+      "sha256": "5f726696ea88e66a1aff5aef78f82cd6256e5b82a74ee9efe0cfb064bdbdb64b",
+      "bytes": 8679
+    },
+    "firehose_read.py": {
+      "sha256": "55e800e74e2cafc091ffe4d40d6fabb3b3cce1f49f45b60f38c9629a7342b34c",
+      "bytes": 8175
+    },
+    "firehose_boot_test.py": {
+      "sha256": "03d1c3ec6f88fc0c0f08cf2c8e51f8711e06a00730694c2f7cba9390b19161ce",
+      "bytes": 8892
+    }
+  },
+  "review": [
+    "All three scripts are exact previous Test22 implementations with only expected Test23 paths, source/target hashes, image names and one-block receipt field substituted.",
+    "Before verifier requires complete read-only fresh audit with exactly five partitions; exact full Test22 source size/hash; APFS clone rehash; all five local files matched to full remote read evidence before returning both-Mac receipt.",
+    "After verifier requires transaction completion, full system/protected verification, no error/reset/userdata write/in-progress block; exact full Test23 target size/hash and clone rehash; both protected copies byte/hash matched to fresh before audit and transaction rows; exact completed single-block list, original hash and target bytes.",
+    "After receipt binds the transaction hash, full system target and size, all four protected hashes and one-block verification. The reviewed system runner separately pins source/delta and all protected partitions including current misc; helpers do not relax those requirements.",
+    "Reset rehashes transaction, full target system and all four protected readbacks before opening USB; both-Mac and one-block receipt flags are mandatory and BCB first32 bytes must be zero.",
+    "Reset uses exclusive output directory and durable attempt journal, read-only configure, fresh GPT(0,14) and misc(18626584,2048) reads matched to receipt, then one power-reset XML with bounded write/ACK. No partition programs, erase, retry or user-data operation.",
+    "Reset short-write/disconnect remains recorded as an attempted/uncertain result; no ACK is fabricated and a subsequent invocation is refused by exclusive directory."
+  ],
+  "offline_tests": {
+    "passed": 14,
+    "script": "test_test23_reset_guards.py",
+    "details": "Fake Reader/USB and save_state; sparse system size with mocked system content hash; actual hashes for all other evidence. Valid once, retry journal, incomplete full readback, missing both-Mac/block receipts, changed transaction/target/fullhash/size/protected data, nonzero BCB, fresh GPT/misc mismatch, short write and disconnect."
+  },
+  "conditions_and_limits": [
+    "Run under ordinary Python with assertions enabled, as the established workflow does; do not use python -O.",
+    "This is a code/evidence-gate review, not a claim that the pending live Test23 backup, system write or after verification has completed.",
+    "Before and after verifiers copy evidence over SSH when explicitly operated by root; they were parsed/reviewed only here, never executed.",
+    "Fresh reset rechecks cover GPT/misc; boot/recovery/system rely on the fully verified preceding transaction and sole-operator same-session workflow.",
+    "APFS clone receipts compare complete content hashes to full live reads; they do not substitute a prepared image for a phone read."
+  ]
+}

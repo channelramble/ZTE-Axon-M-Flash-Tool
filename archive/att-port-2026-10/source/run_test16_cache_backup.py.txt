@@ -1,0 +1,58 @@
+#!/usr/bin/env python3
+from pathlib import Path
+import gzip,hashlib,json,os,shlex,subprocess,sys
+ROOT=Path(__file__).resolve().parent
+REMOTE='/EXAMPLE/REMOTE_HOME/.local/share/axon-m-edl/sessions/SESSION_ID'
+PY='/EXAMPLE/REMOTE_HOME/.local/share/axon-m-edl/.venv/bin/python'
+CONFIG='/EXAMPLE/LOCAL_HOME/.crosstalk/ssh/config'
+NAME='test16-cache-before'
+SIZE=1718616064
+
+def ssh(c,timeout=360):subprocess.run(['ssh','-F',CONFIG,'-o','BatchMode=yes','-o','ConnectTimeout=10','DEVICE_HOST','$SHELL -lc '+shlex.quote(c)],check=True,timeout=timeout)
+def scp(src,dst):subprocess.run(['scp','-q','-F',CONFIG,*map(str,src),str(dst)],check=True,timeout=240)
+def state(**v):
+ p=ROOT/'session.json';s=json.loads(p.read_text());s.update(v);p.write_text(json.dumps(s,indent=2)+'\n')
+phase=sys.argv[1]
+if phase=='stage':scp([ROOT/'backup_test16_cache.py'],'DEVICE_HOST:'+REMOTE+'/')
+elif phase=='load':
+ assert not json.loads((ROOT/'session.json').read_text())['programmer_loaded']
+ state(status='test16_cache_loader_attempt_started')
+ ssh(PY+' '+REMOTE+'/sahara_load.py '+REMOTE+'/prog_emmc_firehose_fujisan.mbn',40)
+ state(status='test16_cache_programmer_loaded',programmer_loaded=True)
+elif phase=='capture':
+ assert json.loads((ROOT/'session.json').read_text())['programmer_loaded']
+ ssh(PY+' '+REMOTE+'/backup_test16_cache.py')
+ state(status='test16_cache_backup_verified_remotely')
+elif phase=='verify':
+ out=ROOT/'hardware-tests'/NAME;out.mkdir(mode=0o700,exist_ok=False)
+ for name in ['backup.json','cache.bin.gz','cache-header.bin','gpt.bin']:
+  scp(['DEVICE_HOST:'+REMOTE+'/'+NAME+'/'+name],out/name)
+ manifest=json.loads((out/'backup.json').read_text())
+ assert manifest['complete'] and manifest['writes_sent']==False and manifest['reset_sent']==False
+ assert (manifest['start_sector'],manifest['sectors'],manifest['bytes'])==(15204376,3356672,SIZE)
+ assert hashlib.sha256((out/'gpt.bin').read_bytes()).hexdigest()=='7f1e4fd44e69e004189f0256ce6d35addfb1e3dbfe1cd55bfd2047b580b1e891'
+ h=hashlib.sha256();size=0;header=b''
+ # Sparse local copy permits read-only debugfs extraction without storing zeros.
+ with gzip.open(out/'cache.bin.gz','rb') as z,(out/'cache.bin').open('xb') as f:
+  for b in iter(lambda:z.read(1024*1024),b''):
+   if not size:header=b[:4096]
+   h.update(b);size+=len(b)
+   assert size<=SIZE
+   if any(b):f.write(b)
+   else:f.seek(len(b),1)
+  f.truncate(size)
+  f.flush();os.fsync(f.fileno())
+ assert size==SIZE and h.hexdigest()==manifest['raw_sha256']
+ disk_hash=hashlib.sha256()
+ with (out/'cache.bin').open('rb') as f:
+  for b in iter(lambda:f.read(1024*1024),b''):disk_hash.update(b)
+ assert (out/'cache.bin').stat().st_size==SIZE and disk_hash.hexdigest()==h.hexdigest()
+ assert header==(out/'cache-header.bin').read_bytes() and header[1080:1082]==b'\x53\xef'
+ import uuid
+ cache_uuid=str(uuid.UUID(bytes=header[1128:1144]))
+ pin={'cache_uuid':cache_uuid,'raw_sha256':h.hexdigest(),'bytes':size,'full_cache_backup_verified_on_both_macs':True}
+ receipt=out/'local-verification.json';receipt.write_text(json.dumps(pin,indent=2)+'\n')
+ scp([receipt],'DEVICE_HOST:'+REMOTE+'/'+NAME+'/')
+ state(status='test16_cache_backup_verified_both_macs',test16_cache_backup_verified=True,test16_cache_raw_sha256=h.hexdigest())
+ print(json.dumps({'full_cache_backup_verified_on_both_macs':True,'bytes':size,'raw_sha256':h.hexdigest()}))
+else:raise ValueError('Unknown phase')

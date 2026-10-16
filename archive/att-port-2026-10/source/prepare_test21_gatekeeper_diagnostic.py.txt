@@ -1,0 +1,138 @@
+#!/usr/bin/env python3
+"""Prepare one exact unavailable-HAL diagnostic binary; no device operations.
+
+This does not supply Gatekeeper or accept credentials. It only avoids blocking
+the framework daemon's constructor on the known unavailable HIDL service.
+"""
+from pathlib import Path
+import argparse
+import hashlib
+import json
+import struct
+
+BASE = Path(__file__).resolve().parent
+SOURCE = BASE / 'test20-gatekeeperd-audit/gatekeeperd.original'
+OUTPUT = BASE / 'prepared/test21-gatekeeper-v1'
+SOURCE_SHA = 'a4ecd5222e7e935057a867f97b2a425c90fa5a1fd7576207d212ee0c20238c94'
+OUTPUT_SHA = '6ad0a440825550c3f5ec504bf438cabcbbb987cf581f088cb939d52164deb5f6'
+SOURCE_BYTES = 44800
+FUNCTION_START, FUNCTION_END = 0x454c, 0x48d4
+FUNCTION_SHA = '16811755ef98feadc0319268f2337c75efa97b9ed5ac2c962ec5d7898c37ade9'
+SITE, TARGET = 0x4678, 0x4754
+OLD, NEW = bytes.fromhex('e80600b5'), bytes.fromhex('37000014')
+
+
+def sha(data):
+    return hashlib.sha256(data).hexdigest()
+
+
+def require(condition, message):
+    if not condition:
+        raise ValueError(message)
+
+
+def patch(data):
+    require(len(data) == SOURCE_BYTES and sha(data) == SOURCE_SHA,
+            'source must be the exact published Test20 gatekeeperd')
+    require(data[:6] == b'\x7fELF\x02\x01', 'expected ELF64 little endian')
+    header = struct.unpack_from('<16sHHIQQQIHHHHHH', data)
+    require(header[2] == 183, 'expected AArch64')
+    loads = [struct.unpack_from('<IIQQQQQQ', data, header[5] + header[9] * i)
+             for i in range(header[10])]
+    require(any(p[0] == 1 and p[1] & 1 and p[2] == p[3]
+                and p[2] <= FUNCTION_START and FUNCTION_END <= p[2] + p[5]
+                for p in loads), 'constructor VA/file executable mapping differs')
+    require(sha(data[FUNCTION_START:FUNCTION_END]) == FUNCTION_SHA,
+            'constructor context differs')
+    context = {
+        0x45a8: '7f1600f9',  # null AIDL shared_ptr control block
+        0x45b0: '3f0f02f8',  # null AIDL pointer, x25 = this+0x20
+        0x45c0: '9f0e03f8',  # null HIDL pointer, x20 = this+0x30
+        0x4674: '280340f9',  # load AIDL pointer
+        SITE: OLD.hex(),
+        0x4700: '540e0094',  # blocking HIDL IGatekeeper::getService@plt
+        0x4738: '880200f9',  # HIDL result stored only in skipped block
+        TARGET: '1f2003d5',  # unchanged continuation NOP
+        0x47f8: '280340f9',  # load AIDL pointer for null-HAL log
+        0x47fc: '890240f9',  # load HIDL pointer for null-HAL log
+        0x4800: '080109aa',  # OR of both HAL pointers
+    }
+    for offset, expected in context.items():
+        require(data[offset:offset + 4].hex() == expected,
+                f'instruction context differs at {offset:#x}')
+    oldword, newword = struct.unpack('<I', OLD)[0], struct.unpack('<I', NEW)[0]
+    require(oldword & 0xff00001f == 0xb5000008, 'expected CBNZ X8')
+    oldimm = (oldword >> 5) & 0x7ffff
+    if oldimm & 0x40000:
+        oldimm -= 0x80000
+    require(SITE + oldimm * 4 == TARGET, 'old branch destination differs')
+    require(newword >> 26 == 0b000101 and SITE + (newword & 0x3ffffff) * 4 == TARGET,
+            'new unconditional branch destination differs')
+    result = data[:SITE] + NEW + data[SITE + 4:]
+    require(len(result) == len(data), 'binary length changed')
+    require([i for i, (a, b) in enumerate(zip(data, result)) if a != b]
+            == [0x4678, 0x4679, 0x467b], 'unexpected byte differences')
+    require(sha(result) == OUTPUT_SHA, 'output pin differs')
+    return result
+
+
+def report(data, result):
+    return {
+        'classification': 'diagnostic only; unavailable Gatekeeper HAL remains unavailable',
+        'target': '/system/bin/gatekeeperd',
+        'source': str(SOURCE.relative_to(BASE)),
+        'source_sha256': sha(data), 'source_bytes': len(data),
+        'payload': 'gatekeeperd.diagnostic',
+        'output_sha256': sha(result), 'output_bytes': len(result),
+        'original_copy': 'gatekeeperd.original',
+        'source_constructor': {'start': hex(FUNCTION_START), 'end_exclusive': hex(FUNCTION_END),
+                               'sha256': FUNCTION_SHA},
+        'patch': {'file_offset_and_va': hex(SITE), 'before': OLD.hex(), 'after': NEW.hex(),
+                  'before_instruction': 'cbnz x8, 0x4754', 'after_instruction': 'b 0x4754',
+                  'changed_byte_offsets': ['0x4678', '0x4679', '0x467b'],
+                  'skipped_range': ['0x467c', '0x4754 (exclusive)']},
+        'preserved': [
+            'Constructor initialization of both HAL pointers to null',
+            'AIDL declared-service lookup; no AIDL service is declared in current ROM',
+            'Native missing-HAL error log and all permission/credential error handling',
+            'Normal framework binder publication after constructor returns',
+            'All other executable bytes, dependencies and ELF metadata',
+        ],
+        'limitations': [
+            'No software Gatekeeper backend is provided or enabled',
+            'Enrollment and verification retain native error responses with no HAL',
+            'PIN/password, biometric and authenticated-key functionality remain unavailable',
+            'The already failed vendor HAL may keep restarting unless separately stopped',
+            'This may reveal further framework boot errors; it does not establish Android usability',
+            'Not a method to unlock or preserve encrypted or credential-protected data',
+            'Must remain a reversible diagnostic for the freshly formatted test device',
+        ],
+        'source_reference': 'https://raw.githubusercontent.com/LineageOS/android_system_core/'
+                            'eb2de7321317226bbc1951382b3171fa59bb4d1d/gatekeeperd/gatekeeperd.cpp',
+        'source_reference_note': 'Current published lineage-23.2 source; exact shipped ELF independently decoded',
+        'phone_or_image_operations': False,
+    }
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--build', action='store_true', help='create immutable local diagnostic payloads')
+    args = parser.parse_args()
+    data = SOURCE.read_bytes()
+    result = patch(data)
+    manifest = report(data, result)
+    if args.build:
+        # mkdir(exist_ok=False) also rejects files, directories and dangling symlinks.
+        OUTPUT.mkdir(mode=0o700)
+        for name, content in [('gatekeeperd.original', data), ('gatekeeperd.diagnostic', result),
+                              ('manifest.json', (json.dumps(manifest, indent=2) + '\n').encode())]:
+            with (OUTPUT / name).open('xb') as handle:
+                handle.write(content)
+        print(json.dumps({'built': str(OUTPUT), 'output_sha256': sha(result)}))
+    else:
+        print(json.dumps({'files_only_validated': True, 'output_sha256': sha(result),
+                          'build_requested': False}))
+
+
+if __name__ == '__main__':
+    main()

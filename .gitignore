@@ -1,0 +1,14 @@
+# Private device artifacts and signing material must stay outside this repo.
+.axon-m-private/
+backups/
+*.img
+*.mbn
+*.elf
+*.bin
+*.dtb
+*.zip
+*.pem
+*.pk8
+*.key
+__pycache__/
+*.pyc

@@ -1,0 +1,97 @@
+#!/usr/bin/env python3
+"""Restore the exact published USB port HAL RC locally; never edit a system image."""
+from pathlib import Path
+import argparse
+import hashlib
+import json
+import os
+from assemble_test20_system import dbg
+
+ROOT = Path(__file__).resolve().parent
+TARGET = '/vendor/etc/init/android.hardware.usb@1.0-service.rc'
+NATIVE = '/vendor/bin/hw/android.hardware.usb@1.0-service'
+SOURCE_SHA = '386ee38f0e558cefe689dba87a513d311380d98906a279d2775ec0773987db92'
+OUTPUT_SHA = '77b3cb1253f3c113cc783d298a1e2dd603f14bc56fbe280f8f7b51aa1de37c9f'
+NATIVE_SHA = '6ef50f071c02fa5e13dd3541cce9c276186f600ea6abb8d18ae00ba7e587968d'
+IMAGE_SHA = '508cd08359c6602c36d1bf0a2711dc064bfae509b5773b55933d68ad1f2570a8'
+MANIFEST_SHA = 'a93ea60ec36fff5fe4a808777a65826b820f6c9b994d4b661c4fd4c909f01255'
+PUBLISHED = (b'service vendor.usb-hal-1-0 /vendor/bin/hw/android.hardware.usb@1.0-service\n'
+             b'    interface android.hardware.usb@1.0::IUsb default\n'
+             b'    class hal\n    user system\n    group system\n')
+sha = lambda b: hashlib.sha256(b).hexdigest()
+
+
+def require(value, message):
+    if not value:
+        raise ValueError(message)
+
+
+def transform(source):
+    require(len(source) == 175 and sha(source) == SOURCE_SHA, 'Exact installed RC required')
+    require(len(PUBLISHED) == len(source) and sha(PUBLISHED) == OUTPUT_SHA,
+            'Published replacement identity changed')
+    require(source.splitlines()[:5] == [
+        PUBLISHED.splitlines()[0], b'    disabled', b'    class hal',
+        b'    user system', b'    group system'], 'Unexpected installed service semantics')
+    require(all(not line for line in source.splitlines()[5:]), 'Unexpected trailing RC actions')
+    return PUBLISHED
+
+
+def prepare(build=False):
+    image = ROOT / 'test22-system-v1/system.img'
+    manifest_path = image.parent / 'manifest.json'
+    require(image.is_file() and not image.is_symlink() and image.stat().st_size == 6979321856,
+            'Wrong source image path or size')
+    require(sha(manifest_path.read_bytes()) == MANIFEST_SHA, 'Source image receipt changed')
+    manifest = json.loads(manifest_path.read_text())
+    require(manifest['passed'] and manifest['image_sha256'] == IMAGE_SHA,
+            'Source image receipt not verified')
+    original = dbg(image, 'cat ' + TARGET)
+    native = dbg(image, 'cat ' + NATIVE)
+    require(len(native) == 31576 and sha(native) == NATIVE_SHA, 'Native port HAL differs')
+    output = transform(original)
+    published = ROOT / 'los23-usb-rc-audit-sources/vendor__etc__init__android.hardware.usb@1.0-service.rc'
+    require(published.read_bytes() == output, 'Published extracted source differs')
+    metadata = dbg(image, 'stat ' + TARGET)
+    require(b'Type: regular' in metadata and b'Links: 1 ' in metadata,
+            'Unexpected RC inode metadata')
+    report = {
+        'passed': True, 'target': TARGET, 'payload': 'android.hardware.usb@1.0-service.rc',
+        'source_sha256': SOURCE_SHA, 'output_sha256': OUTPUT_SHA, 'bytes': len(output),
+        'changed_bytes': sum(a != b for a, b in zip(original, output)),
+        'native_path': NATIVE, 'native_sha256': NATIVE_SHA, 'native_bytes': len(native),
+        'source_image_sha256_from_verified_receipt': IMAGE_SHA,
+        'source_image_manifest_sha256': MANIFEST_SHA,
+        'source_inode_metadata_sha256': sha(metadata),
+        'source_rc_and_native_reextracted_and_verified': True,
+        'whole_source_image_rehash_repeated': False,
+        'restores_exact_published_service_rc': True,
+        'required_assembly': 'Same-size inode file-data replacement; preserve all metadata, xattrs and extents',
+        'scope': ['Restore IUsb/default init interface and automatic class hal startup',
+                  'No native binary, gadget RC, sys.usb property, MTP, kernel, DT, data or boot changes'],
+        'phone_operations': False, 'system_image_modified': False, 'hardware_tested': False,
+        'limits': ['Port query opens role nodes for capability checks but sends no role data',
+                   'Actual role changes remain possible through explicit switchRole RPC',
+                   'Future framework or hardware failures are not ruled out'],
+    }
+    if build:
+        out = ROOT / 'prepared/test23-usb-port-service-v1'
+        require(not out.exists() and not out.is_symlink(), 'Output already exists')
+        out.mkdir(mode=0o700)
+        (out / 'service.original.rc').write_bytes(original)
+        (out / report['payload']).write_bytes(output)
+        (out / 'source-inode-stat.txt').write_bytes(metadata)
+        (out / 'manifest.json').write_text(json.dumps(report, indent=2) + '\n')
+    return report
+
+
+if __name__ == '__main__':
+    os.umask(0o077)
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--build', action='store_true', help='Write only the immutable local RC component')
+    args = parser.parse_args()
+    result = prepare(args.build)
+    print(json.dumps({'passed': result['passed'], 'source_sha256': SOURCE_SHA,
+                      'output_sha256': OUTPUT_SHA, 'bytes': result['bytes'],
+                      'changed_bytes': result['changed_bytes'], 'local_component_written': args.build,
+                      'system_image_modified': False, 'phone_operations': False}))

@@ -1,0 +1,24 @@
+{
+  "passed": true,
+  "read_only_binary_review": true,
+  "candidate_path": ".axon-m-private/prepared/test21-gatekeeper-v1/gatekeeperd.diagnostic",
+  "candidate_sha256": "6ad0a440825550c3f5ec504bf438cabcbbb987cf581f088cb939d52164deb5f6",
+  "builder_sha256": "bca63ae9bbada37fcc91beb27f1da80d117c7af71d9b8c332b6dc5eb02ecc0ba",
+  "checks": {
+    "original_matches_independent_extraction": true,
+    "source_pin": true,
+    "candidate_pin": true,
+    "same_size": true,
+    "exact_byte_differences": true,
+    "expected_context": true,
+    "null_initialization_unchanged": true,
+    "continuation_and_all_methods_unchanged": true,
+    "manifest_pins": true,
+    "manifest_diagnostic_scope": true,
+    "unconditional_branch_to_existing_continuation": true,
+    "independent_builder_reproduction_in_memory": true
+  },
+  "evidence": ".axon-m-private/test20-gatekeeperd-audit/review.json",
+  "decision": "Local diagnostic candidate matches reviewed one-instruction branch. It preserves native null-HAL and credential-failure behavior; no software authentication supplied. Hardware and framework progress untested.",
+  "phone_or_shared_image_operations": false
+}

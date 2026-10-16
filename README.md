@@ -1,8 +1,12 @@
 # ZTE Axon M Flash Tool
 
-Scripts, a corrected config and notes for flashing the **ZTE Axon M** (Z999, codename `fujisan`, Snapdragon 821 / MSM8996) with Qualcomm **QFIL** in EDL mode. It includes the fix for QFIL failing with `SAHARA_NAK_INVALID_CMD` / "Sahara protocol error".
+Scripts, a corrected QFIL config, and research notes for the **ZTE Axon M** (Z999, codename `fujisan`, Snapdragon 821 / MSM8996). The original Windows tool fixes QFIL's `SAHARA_NAK_INVALID_CMD` / "Sahara protocol error"; the repository also documents adapting the published unofficial LineageOS 23.2 release to the AT&T model.
 
-Tested on an AT&T Axon M flashing the unofficial TWRP 3.2.3-0 for fujisan from XDA, using QFIL 2.0.1.9 on Windows 10.
+**Current AT&T port status — October 16, 2026:** Test23 boots full Android 16. Seven observations over **185.767 seconds** verified boot completion, an unchanged `system_server` process, unlocked user 0, the launcher, and adb-only peripheral USB. The owner confirms both screens work: single while folded, spanning both while unfolded. This remains a **diagnostic build, not a production-ready ROM**: SELinux is permissive, adb runs as root without authentication, credential support is unavailable, and camera crashes remain.
+
+Start with [the AT&T port status](docs/ATT_PORT_STATUS.md) for verified results, exact image hashes, recovery entry, limitations, and next priorities. [AGENTS.md](AGENTS.md) retains the chronological investigation. ROM images, firmware, signing keys, and device backups are not distributed here; this is not a one-click LineageOS installer.
+
+The original QFIL workflow below was tested with TWRP 3.2.3-0, QFIL 2.0.1.9, and Windows 10. It is separate from the later AT&T Android 16 port.
 
 > **Warning:** EDL flashing writes straight to the phone's storage. The wrong file or sector can brick it. Use this at your own risk.
 
@@ -21,6 +25,38 @@ Tested on an AT&T Axon M flashing the unofficial TWRP 3.2.3-0 for fujisan from X
 | Recovery won't boot after flashing a different recovery | The new recovery doesn't suit the phone's firmware | See "Restoring a recovery that won't boot" below. |
 
 Full details and evidence: [docs/FINDINGS.md](docs/FINDINGS.md). Partition layout: [docs/PARTITIONS.md](docs/PARTITIONS.md).
+
+## Continuing the Android 16 port
+
+For the **Android 16 / TWRP 3.7.0 AT&T port**, read
+[the current status](docs/ATT_PORT_STATUS.md), then [AGENTS.md](AGENTS.md)
+for the detailed evidence. The older TWRP 3.2.3 log-reader workflow requires
+**platform-tools 29.0.6**; the setup menu's adb selection predates that workflow.
+
+The read-only Python helper below lists level 6/7 initcalls in pointer order
+from the **exact debug build's** `System.map` (Python 3.9+, no dependencies):
+
+```sh
+python3 scripts/initcall_order.py /path/to/System.map
+python3 scripts/initcall_order.py /path/to/System.map --level 6 --json
+```
+
+It checks table boundaries and completeness, including synchronous initcalls.
+Function names are inferred from pointer symbols, including the kernel's Clang
+LTO naming format. Confirm them against `vmlinux` or `initcall_debug` logs before
+using `initcall_blacklist`. It does not select a blacklist, build an image, or
+connect to the phone. Test it with `python3 -m unittest discover -s tests`.
+
+[Local preparation](docs/LOCAL_PREPARATION.md) covers the offline
+`fujisan_image.py` tool, signed image candidates, and `check_backups.py` for
+validating saved GPT/partition reads. Its early test descriptions are historical;
+the status page and latest AGENTS sections take precedence. Test18 TWRP 3.7 and
+Test19 LineageOS recovery boot with adb. Test23 full Android retains the Test20
+boot image and Test19-derived recovery, adds the reviewed Gatekeeper and optional
+GPU-statistics diagnostics, and restores the USB port HAL needed to finish boot.
+Actual recovery-slot entry is verified through a menu-only BCB request; the
+bootloader menu's recovery route remains unreliable. Keep downloaded/generated
+images and signing keys outside this repo.
 
 ## Requirements (not included)
 

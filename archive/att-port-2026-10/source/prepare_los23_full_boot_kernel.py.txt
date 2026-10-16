@@ -1,0 +1,180 @@
+#!/usr/bin/env python3
+"""Local diagnostic kernel/DT component; never signs or constructs a boot image.
+
+The published boot image's own DTs are preserved except for named AT&T/USB
+fixes and explicit isolation of three untested generic-PIL firmware providers.
+GPU and its a530_zap provider are enabled. This is not a production config.
+"""
+import gzip
+import json
+import os
+from pathlib import Path
+import struct
+import sys
+
+ROOT = Path(__file__).resolve().parent
+sys.path.insert(0, str(ROOT.parent / 'ZTE-Axon-M-Flash-Tool/scripts'))
+from fujisan_image import BootImage, Fdt, kernel_dtbs, report
+import prepare_los23_recovery_kernel as reviewed
+from prepare_los23_recovery_kernel import sha, require, flatten, bl_target
+
+SOURCE_NAME = 'lineage-23.2-20261006-boot.img'
+SOURCE_SHA = 'ed5cbf4e9a57ce214c182510fd1db30a59ebda7a88595a901f36a3127b6c388f'
+REVIEWED_MODULE_SHA = '3ac860116349e2fd006aff55b427145b3859476d5c1d1c03c06243634fb7d1f0'
+DT_HASHES = (
+    '513e06eee1e5bedfbab7975084607f34735f094517cae56c2cd62c932d79cb4d',
+    '95a1131cb89390af808f66255458d03445073695a0e8613064461499f7c74917',
+)
+ISOLATED_PROVIDERS = (
+    ('qcom,lpass@9300000', 'adsp', 1),
+    ('qcom,venus@ce0000', 'venus', 9),
+    ('qcom,ssc@1c00000', 'slpi', 12),
+)
+BLACKLIST_NAMES = (
+    'adsp_loader_init', 'pil_mss_init', 'msm_pil_init',
+    'msm_vidc_init', 'sensors_ssc_init', 'tz_log_init',
+)
+OUTPUT_STEM = 'los23-full-boot-kernel-diagnostic'
+
+
+def transform_source(data):
+    require(sha(data) == SOURCE_SHA, 'Exact published LOS boot source required')
+    source_report = report(data)
+    require(source_report['signature_verified'] and source_report['boot_id_valid']
+            and source_report['signature_target'] == '/boot', 'Source signature/boot ID mismatch')
+    boot = BootImage(data)
+    _, raw, trees = kernel_dtbs(boot.kernel)
+    require(sha(raw) == reviewed.RAW_SHA and len(raw) == reviewed.RAW_BYTES, 'Wrong raw kernel')
+    require(tuple(sha(blob) for blob, _ in trees) == DT_HASHES, 'Wrong own boot DT tail')
+    require(sha(Path(reviewed.__file__).read_bytes()) == REVIEWED_MODULE_SHA,
+            'Reviewed kernel guard implementation changed')
+    # Re-run the reviewed exact-source symbol/context/queue/cleanup checks.
+    # Only its validated raw kernel is reused, never its DTs or cmdline.
+    validated, _, baseline = reviewed.transform_source((ROOT/reviewed.SOURCE_NAME).read_bytes())
+    _, patched, _ = kernel_dtbs(validated)
+    require(sha(patched) == reviewed.PATCHED_RAW_SHA, 'Wrong validated raw result')
+    require([i for i, (a, b) in enumerate(zip(raw, patched)) if a != b] ==
+            list(range(reviewed.QSEE_OFFSET, reviewed.QSEE_OFFSET+4)), 'Unexpected raw patch scope')
+    require(bl_target(raw, 0xffffff801069edc4) == 0xffffff80105c11c8,
+            'GPU a530_zap subsystem_get call changed')
+    require(bl_target(raw, 0xffffff801069ed90) == 0xffffff80105cb6a8,
+            'GPU SCM resume call changed')
+    require(bl_target(raw, 0xffffff80117f7b40) == 0xffffff80106bcf90,
+            'Generic PIL platform driver registration changed')
+    all_blacklist = {entry['name']: entry for entry in baseline['diagnostic_blacklist']}
+    require(set(all_blacklist)-set(BLACKLIST_NAMES) == {'kgsl_3d_init', 'pil_tz_init'},
+            'Unexpected diagnostic blacklist selection')
+
+    blobs, changes = [], []
+    for index, (blob, tree) in enumerate(trees):
+        before = flatten(tree.root)
+        require(tree.free_tail == 0 and tree.add_att_reservation(), 'Original DT reservation/slack differs')
+        soc = tree.root.child('soc')
+        require(soc is not None, 'Missing soc')
+        expected = set()
+        for name, compatible in (('qcrypto@660000', b'qcom,qcrypto\0'),
+                                 ('qcedev@660000', b'qcom,qcedev\0')):
+            node = soc.child(name)
+            require(node is not None and node.props.get('compatible') == compatible
+                    and node.props.get('reg') == bytes.fromhex('00660000000200000064400000024000')
+                    and 'status' not in node.props, 'Unexpected QCE device')
+            node.props['status'] = b'disabled\0'
+            expected.add(('/soc/'+name, 'status'))
+        usb = soc.child('ssusb@6a00000')
+        require(usb is not None and usb.props.get('compatible') == b'qcom,dwc-usb3-msm\0',
+                'Unexpected USB controller')
+        old_extcon = usb.props.get('extcon', b'')
+        suppliers = [(path, props) for path, props in before.items()
+                     if props.get('phandle', props.get('linux,phandle')) == old_extcon]
+        require(len(old_extcon) == 4 and any(old_extcon) and len(suppliers) == 1
+                and 'pericom' in suppliers[0][0]
+                and b'pericom' in suppliers[0][1].get('compatible', b''), 'Wrong extcon supplier')
+        usb.props['extcon'] = b'\0'*4  # Keep present; do not enable implicit host fallback.
+        expected.add(('/soc/ssusb@6a00000', 'extcon'))
+        for name, firmware, pas in ISOLATED_PROVIDERS:
+            node = soc.child(name)
+            require(node is not None and node.props.get('compatible') == b'qcom,pil-tz-generic\0'
+                    and node.props.get('qcom,pas-id') == struct.pack('>I', pas)
+                    and node.props.get('qcom,firmware-name') == firmware.encode()+b'\0'
+                    and 'status' not in node.props, 'Unexpected isolated PIL provider: '+name)
+            node.props['status'] = b'disabled\0'
+            expected.add(('/soc/'+name, 'status'))
+        gpu = soc.child('qcom,kgsl-hyp')
+        require(gpu is not None and gpu.props.get('compatible') == b'qcom,pil-tz-generic\0'
+                and gpu.props.get('qcom,pas-id') == struct.pack('>I', 13)
+                and gpu.props.get('qcom,firmware-name') == b'a530_zap\0'
+                and 'status' not in gpu.props, 'Unexpected GPU PIL provider')
+        new_blob = tree.serialize(free=8192)
+        new_tree = Fdt(new_blob)
+        after = flatten(new_tree.root)
+        added = '/reserved-memory/ap_share_region@9ff00000'
+        require(set(after)-set(before) == {added} and not set(before)-set(after), 'Unexpected DT node changes')
+        require(after[added] == {'reg': bytes.fromhex('000000009ff000000000000000100000'),
+                                 'no-map': b''}, 'Unexpected reservation')
+        changed = {(path, prop) for path in before for prop in before[path].keys() | after[path].keys()
+                   if before[path].get(prop) != after[path].get(prop)}
+        require(changed == expected, 'Unexpected DT semantic changes')
+        require(new_tree.reserve == tree.reserve and new_tree.bootcpu == tree.bootcpu
+                and new_tree.last == tree.last and new_tree.free_tail == 8192, 'DT metadata changed')
+        blobs.append(new_blob)
+        changes.append(dict(index=index, source_sha256=sha(blob), transformed_sha256=sha(new_blob),
+                            msm_id=tree.root.props['qcom,msm-id'].hex(),
+                            changed_properties=sorted(changed), added_node=added,
+                            free_tail_bytes=8192, own_display_chosen_thermal_properties_exact=True,
+                            gpu_provider_properties_exact=True, other_semantic_properties_exact=True))
+    kernel = gzip.compress(patched, compresslevel=9, mtime=0) + b''.join(blobs)
+    _, checked_raw, checked_trees = kernel_dtbs(kernel)
+    require(checked_raw == patched and [b for b, _ in checked_trees] == blobs, 'Component roundtrip failed')
+    require('initcall_blacklist=' not in boot.cmdline and 'androidboot.fujisan.recovery=' not in boot.cmdline,
+            'Unexpected source boot cmdline')
+    cmdline = boot.cmdline+' ignore_loglevel initcall_debug initcall_blacklist='+','.join(BLACKLIST_NAMES)
+    require(len(cmdline.encode()) <= 1536, 'Diagnostic cmdline too long')
+    validation = dict(
+        passed=True, source_image=SOURCE_NAME, source_sha256=SOURCE_SHA,
+        source_signature_and_boot_id_valid=True, reviewed_guard_module_sha256=REVIEWED_MODULE_SHA,
+        source_raw_sha256=reviewed.RAW_SHA, transformed_raw_sha256=sha(patched),
+        raw_changed_bytes=4, qsee_instruction_offset=hex(reviewed.QSEE_OFFSET),
+        qsee_original_hex=reviewed.QSEE_OLD.hex(), qsee_replacement_hex=reviewed.QSEE_NEW.hex(),
+        queue_initialization_mutex_unlock_and_failure_cleanup_preserved=True,
+        original_988_initcall_pointers_byte_exact=True,
+        deferred_flushes_free_initmem_late_cleanup_original=True, no_led_instrumentation_or_caves=True,
+        enabled_previously_skipped_initcalls=['kgsl_3d_init', 'pil_tz_init'],
+        diagnostic_blacklist=[all_blacklist[name] for name in BLACKLIST_NAMES],
+        isolated_generic_pil_firmware_providers=[dict(node='/soc/'+n, firmware=f, pas_id=p)
+                                                for n, f, p in ISOLATED_PROVIDERS],
+        enabled_gpu_provider=dict(node='/soc/qcom,kgsl-hyp', firmware='a530_zap', pas_id=13),
+        dt_changes=changes, diagnostic_cmdline=cmdline,
+        transformed_kernel_component_sha256=sha(kernel), transformed_kernel_component_bytes=len(kernel),
+        source_ramdisk_untouched=True, complete_image_built_or_signed=False, hardware_tested=False,
+        limitations=[
+            'This is a proposed first-graphics diagnostic, not a production Android configuration.',
+            'GPU and generic-PIL re-enablement and three provider disables have not been hardware tested.',
+            'AT&T a530_zap firmware must be available through the prepared system image; its presence alone does not prove GPU startup.',
+            'QSEE query failure and QCE disables remain cumulative diagnostics, not independently proved necessary.',
+            'Software KeyMint is configured but QSEE-backed gatekeeper remains unavailable/unproven; existing encrypted userdata compatibility is not established.',
+            'ADSP, Venus, SLPI, modem and secure logging functionality are deliberately restricted.',
+            'Skipping msm_pil_init omits optional IMEM bookkeeping and PM notifier registration; suspend behavior is not qualified.',
+            'This module does not configure Android init, adb, logging, SELinux, mounts or userdata; startup/data gates remain separate.',
+            'Native USB peripheral mode action remains necessary; Type-C automatic role detection is not repaired.',
+            'No China/DoCoMo bootloader or firmware installation is authorized or implied.'],
+    )
+    return kernel, cmdline, validation
+
+
+def main():
+    os.umask(0o077)
+    paths = [ROOT/'prepared'/(OUTPUT_STEM+suffix) for suffix in ('.bin', '.cmdline.txt', '.validation.json')]
+    require(all(not path.exists() and not path.is_symlink() for path in paths), 'Immutable output already exists')
+    kernel, cmdline, validation = transform_source((ROOT/SOURCE_NAME).read_bytes())
+    values = [kernel, (cmdline+'\n').encode(), (json.dumps(validation, indent=2)+'\n').encode()]
+    for path, value in zip(paths, values):
+        with path.open('xb') as stream:
+            stream.write(value)
+            stream.flush()
+            os.fsync(stream.fileno())
+    print(json.dumps({key: validation[key] for key in ('passed', 'transformed_raw_sha256',
+          'transformed_kernel_component_sha256', 'complete_image_built_or_signed', 'hardware_tested')}, indent=2))
+
+
+if __name__ == '__main__':
+    main()

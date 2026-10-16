@@ -1,0 +1,186 @@
+#!/usr/bin/env python3
+"""Bounded, read-only eMMC Firehose client; programmer must already be in RAM.
+Only nop, configure (SkipWrite=1), and read XML commands are emitted.
+"""
+import argparse
+import hashlib
+import json
+import os
+from pathlib import Path
+import time
+import xml.etree.ElementTree as ET
+
+
+def pop_xml(buffer):
+    while buffer and buffer[0] in b'\0\r\n\t ':
+        del buffer[0]
+    if not buffer:
+        return None
+    if buffer[0] != ord('<'):
+        raise ValueError('Expected Firehose XML, received non-XML data')
+    end = buffer.find(b'</data>')
+    if end < 0:
+        if len(buffer) > 1024 * 1024:
+            raise ValueError('Unbounded Firehose XML message')
+        return None
+    end += len(b'</data>')
+    encoded = bytes(buffer[:end]); del buffer[:end]
+    root = ET.fromstring(encoded)
+    if root.tag != 'data':
+        raise ValueError('Expected Firehose data document')
+    return root, encoded
+
+
+class Reader:
+    def __init__(self, log):
+        import usb.core
+        import usb.util
+        self.usb_core, self.usb_util = usb.core, usb.util
+        devices = list(usb.core.find(find_all=True, idVendor=0x05c6, idProduct=0x9008))
+        if len(devices) != 1:
+            raise RuntimeError('Expected exactly one EDL device')
+        self.device = devices[0]
+        interface = next(i for i in self.device.get_active_configuration() if i.bInterfaceClass == 0xff)
+        self.ep_in = next(e for e in interface if usb.util.endpoint_direction(e.bEndpointAddress) == usb.util.ENDPOINT_IN and usb.util.endpoint_type(e.bmAttributes) == 2)
+        self.ep_out = next(e for e in interface if usb.util.endpoint_direction(e.bEndpointAddress) == usb.util.ENDPOINT_OUT and usb.util.endpoint_type(e.bmAttributes) == 2)
+        usb.util.claim_interface(self.device, interface.bInterfaceNumber)
+        # This legacy programmer rejects CLEAR_FEATURE/ENDPOINT_HALT. Do not
+        # issue clear_halt; use its bulk protocol directly with a large buffer.
+        self.pending = bytearray()
+        self.log = log
+
+    def close(self):
+        self.usb_util.dispose_resources(self.device)
+
+    def receive(self, length=65536, timeout=1000):
+        try:
+            return bytes(self.ep_in.read(length, timeout=timeout))
+        except self.usb_core.USBTimeoutError:
+            return b''
+
+    def send(self, tag, attributes=None):
+        if tag not in ('nop', 'configure', 'read'):
+            raise ValueError('Only read-session Firehose commands are allowed')
+        root = ET.Element('data')
+        ET.SubElement(root, tag, {k: str(v) for k, v in (attributes or {}).items()})
+        encoded = b'<?xml version="1.0" ?>' + ET.tostring(root, encoding='utf-8')
+        self.log.write(b'TX ' + encoded + b'\n'); self.log.flush()
+        if self.ep_out.write(encoded, timeout=3000) != len(encoded):
+            raise RuntimeError('Short USB XML write')
+
+    def document(self):
+        result = pop_xml(self.pending)
+        if result:
+            root, encoded = result
+            self.log.write(b'RX ' + encoded + b'\n'); self.log.flush()
+            return root
+        return None
+
+    def drain(self):
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline:
+            while self.document() is not None:
+                pass
+            data = self.receive(timeout=250)
+            if not data:
+                if self.pending.strip(b'\0\r\n\t '):
+                    raise ValueError('Incomplete initial Firehose XML')
+                return
+            self.pending.extend(data)
+        raise TimeoutError('Initial Firehose response queue did not settle')
+
+    def response(self, rawmode=None, timeout=15, allow_nak=False):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            doc = self.document()
+            if doc is None:
+                self.pending.extend(self.receive())
+                continue
+            responses = list(doc.iter('response'))
+            if not responses:
+                continue
+            if len(responses) != 1:
+                raise ValueError('Ambiguous Firehose response')
+            attrs = dict(responses[0].attrib)
+            if attrs.get('value') == 'NAK' and allow_nak:
+                return attrs
+            if attrs.get('value') != 'ACK':
+                raise RuntimeError('Firehose returned NAK; details are in the private XML log')
+            if rawmode is not None and attrs.get('rawmode', '').lower() != ('true' if rawmode else 'false'):
+                raise ValueError('Unexpected Firehose raw-mode state')
+            return attrs
+        raise TimeoutError('No Firehose ACK within transaction deadline')
+
+    def configure(self):
+        self.drain()
+        self.send('nop')
+        probe = self.response(allow_nak=True)
+        print('Firehose NOP response: ' + probe['value'], flush=True)
+        self.send('configure', {'MemoryName':'eMMC', 'Verbose':0, 'AlwaysValidate':0,
+                                'MaxDigestTableSizeInBytes':2048,
+                                'MaxPayloadSizeToTargetInBytes':65536,
+                                'ZLPAwareHost':1, 'SkipStorageInit':0, 'SkipWrite':1})
+        attributes = self.response()
+        if 'MemoryName' in attributes and attributes['MemoryName'].lower() != 'emmc':
+            raise ValueError('Programmer reported a different storage type')
+        print('eMMC configured with SkipWrite=1', flush=True)
+
+    def read(self, start, count, output):
+        partial = output.with_name(output.name + '.part')
+        if output.exists() or partial.exists():
+            raise FileExistsError('Backup output or partial file already exists')
+        self.send('read', {'SECTOR_SIZE_IN_BYTES':512, 'num_partition_sectors':count,
+                           'physical_partition_number':0, 'start_sector':start})
+        self.response(rawmode=True)
+        remaining = total = count * 512
+        next_progress = 16 * 1024 * 1024
+        digest = hashlib.sha256()
+        no_progress_deadline = time.monotonic() + 10
+        with partial.open('xb') as stream:
+            while remaining:
+                if self.pending:
+                    data = bytes(self.pending[:remaining]); del self.pending[:len(data)]
+                else:
+                    data = self.receive(min(65536, remaining), timeout=2000)
+                if not data:
+                    if time.monotonic() > no_progress_deadline:
+                        raise TimeoutError('Raw storage read stopped making progress')
+                    continue
+                stream.write(data); digest.update(data); remaining -= len(data)
+                no_progress_deadline = time.monotonic() + 10
+                if total - remaining >= next_progress:
+                    print(json.dumps({'file':output.name, 'read_bytes':total-remaining,
+                                      'total_bytes':total}), flush=True)
+                    next_progress += 16 * 1024 * 1024
+            self.response(rawmode=False)
+            stream.flush(); os.fsync(stream.fileno())
+        os.link(partial, output)  # atomic, refuses an existing destination
+        partial.unlink()
+        result = {'file':output.name, 'start_sector':start, 'sectors':count,
+                  'bytes':total, 'sha256':digest.hexdigest(), 'final_ack':True}
+        print(json.dumps(result), flush=True)
+        return result
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('start', type=int)
+    parser.add_argument('count', type=int)
+    parser.add_argument('output', type=Path)
+    parser.add_argument('--log', type=Path, required=True)
+    args = parser.parse_args()
+    if args.start < 0 or not 1 <= args.count <= 16777216:
+        parser.error('Invalid read bounds')
+    if args.output.exists() or args.output.with_name(args.output.name + '.part').exists():
+        parser.error('Output already exists')
+    os.umask(0o077)
+    with args.log.open('xb') as log:
+        reader = Reader(log)
+        try:
+            reader.configure()
+            reader.read(args.start, args.count, args.output)
+        finally:
+            reader.close()
+
+if __name__ == '__main__':
+    main()

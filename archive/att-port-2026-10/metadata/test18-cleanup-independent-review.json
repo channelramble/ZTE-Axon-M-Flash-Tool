@@ -1,0 +1,118 @@
+{
+  "passed": true,
+  "image_sha256": "f9924f43f50689bb05982897f4410a4039f22284b068735fbf642b5592dcb9ba",
+  "image_bytes": 26182707,
+  "padded_sha256": "838d57535f222d8d938e0e81106960225daed7e4fd745403ff9722861224c46b",
+  "raw_sha256": "66833e48a3ae42833801f8919ac65bccf6211274671d5a58b0d7f1e7ad81cc41",
+  "expected_full_boot_before_sha256": "4c7fb194e1ae769da5b668a9bbb6d17d0f8eda5eedee1e952247ba9fa35f237c",
+  "expected_full_boot_after_sha256": "1af22309c02a580d8ffcc27dc568533de13e379ae17fec507885026b441402ff",
+  "reviewer": "next_diagnostic_review",
+  "reviewed_at": "2026-10-16T12:20:05.441537+00:00",
+  "local_only": true,
+  "hardware_tested": false,
+  "original_site_restores": [
+    {
+      "offset": "0x5fecd0",
+      "bytes": 4,
+      "restored_hex": "60d647f9"
+    },
+    {
+      "offset": "0x5fecd4",
+      "bytes": 4,
+      "restored_hex": "d213e997"
+    },
+    {
+      "offset": "0x5fed98",
+      "bytes": 4,
+      "restored_hex": "a113e997"
+    },
+    {
+      "offset": "0xfc453c",
+      "bytes": 4,
+      "restored_hex": "335dc197"
+    },
+    {
+      "offset": "0x174d398",
+      "bytes": 8,
+      "restored_hex": "f090780980ffffff"
+    },
+    {
+      "offset": "0x174d3a0",
+      "bytes": 8,
+      "restored_hex": "7093780980ffffff"
+    },
+    {
+      "offset": "0x174d3a8",
+      "bytes": 8,
+      "restored_hex": "70137a0980ffffff"
+    }
+  ],
+  "changed_raw_bytes": 23,
+  "all_other_raw_bytes_exact_to_test17": true,
+  "dt_tail_byte_exact_to_test17": true,
+  "cmdline_header_addresses_second_unchanged": true,
+  "all_initcall_pointers_checked": 986,
+  "only_changed_cleanup_indices": [
+    686,
+    687,
+    688
+  ],
+  "ramdisk_changed_files": [
+    "init.rc",
+    "sbin/axon-diag-collect.sh",
+    "sbin/axon-diag-persist.sh"
+  ],
+  "ramdisk_changes_only_literal_test17_to_test18": true,
+  "all_other_cpio_entries_byte_exact": true,
+  "post_fs_services_usb_mtp_charger_exact": true,
+  "cache_identity_mount_and_output_bounds_preserved": true,
+  "signature_verified": true,
+  "boot_id_valid": true,
+  "signature_target": "/boot",
+  "signature_exact_file_end": true,
+  "remaining_external_cave_branches": [
+    [
+      "0xffffff800867ec48",
+      "0xffffff800978667c"
+    ],
+    [
+      "0xffffff8009044538",
+      "0xffffff80097867e8"
+    ]
+  ],
+  "cave_lifetime": {
+    "within_init_memory": true,
+    "preenable_hook_has_four_static_initcall_table_callers": true,
+    "no_incoming_direct_branch_to_deferred_initcall": true,
+    "after_async_wrapper_calls_original_async_once_and_returns_before_free_initmem": true,
+    "ordinary_runtime_workqueue_callbacks_have_no_branch_into_cave": true,
+    "conditional_flush_and_preflush_helpers_unreachable": true,
+    "green_helper_installs_no_callback_into_init_text": true,
+    "normal_init_memory_release_restored_bytes": 655360
+  },
+  "green_interpretation": "Level6 pre-enable calibration remains OFF/ON/OFF. Preflush green is removed. A later green supports return from initcalls, restored cleanup and async wait. It precedes free_initmem and does not prove free_initmem/userspace/rendering success. Red without a positive marker remains conditional on LED contention/hardware.",
+  "harness_review": {
+    "runner_review_gate_before_every_stage": true,
+    "full_fresh_before_and_after_readbacks_preserved": true,
+    "single_reset_after_two_mac_receipt_preserved": true,
+    "clear_bcb_only_evidence_paths_renamed": true,
+    "no_implicit_phone_execution": true,
+    "expected_full_boot_computed_from_padded_prefix_plus_verified_test17_tail": true
+  },
+  "resource_review": {
+    "all_five_files_verified": true,
+    "enabled_clock_count": 153,
+    "usb_domain_use_count": 1,
+    "mdss_domain_use_count": 2,
+    "dsi_software_holds_present": true,
+    "late_panel_bias_zero_use_counts_do_not_prove_first_frame_votes_missing": true,
+    "separate_fujisan_display_interface_unused_seq0_idle": true,
+    "risk": "Normal cleanup may expose unvoted hardware or another deferred dependency. Debug summaries cannot prove each rail state. Restore waits and all three cleanups together; do not infer display fixed before hardware test."
+  },
+  "sources": [
+    "kernel-analysis/source/drivers/base/dd.c: static sync-level initcall registrations and original trigger/flush",
+    "kernel-analysis/source/init/main.c:966-975: initcalls, async wait, free_initmem, memory protection order",
+    "https://github.com/Anya1014CN/android_kernel_zte_msm8996/blob/d90bd3b69fa1a9587212addcfe7c6b5a93da65a5/drivers/clk/msm/clock.c#L1280",
+    "https://github.com/Anya1014CN/android_kernel_zte_msm8996/blob/d90bd3b69fa1a9587212addcfe7c6b5a93da65a5/drivers/regulator/proxy-consumer.c#L193"
+  ]
+}

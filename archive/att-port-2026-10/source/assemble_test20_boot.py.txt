@@ -1,0 +1,70 @@
+#!/usr/bin/env python3
+"""Local signed Android boot and known-good LOS recovery control artifacts."""
+from pathlib import Path
+import gzip,hashlib,json,os,sys
+ROOT=Path(__file__).resolve().parent
+sys.path.insert(0,str(ROOT.parent/'ZTE-Axon-M-Flash-Tool/scripts'))
+from fujisan_image import BootImage,gzip_member,cpio_entries,report,sign_image
+from prepare_los23_full_boot_kernel import transform_source,SOURCE_NAME,SOURCE_SHA
+sha=lambda b:hashlib.sha256(b).hexdigest()
+SYSTEM_SHA='7c32f735219768f31444400c67cf996b5f80de4c17d0d1c1ed65a7d0acf0883a'
+CONTROL_SHA='7464779eaa501e58b9b1b78b09676786c98e154de6631f82f8d2bc8a37d1ed46'
+
+def build():
+ source=(ROOT/SOURCE_NAME).read_bytes();assert sha(source)==SOURCE_SHA
+ original=BootImage(source);kernel,cmdline,kreport=transform_source(source)
+ _,raw,tail=gzip_member(original.ramdisk);assert not tail
+ assert sha(raw)=='58370d17331ce0add4d34dd9910ae608f3c56ed47d4a0b318db6a29d6fcb56e9'
+ entries=cpio_entries(raw,allow_duplicate_directories={'dev'})
+ assert len(entries)==24 and len([e for e in entries if e[0]=='dev'])==2
+ match=[e for e in entries if e[0]=='fstab.qcom'];assert len(match)==1
+ old=match[0][2];assert sha(old)=='2549a68519025577e1ead2b28fcf32a1fa4e088cbda0f6262381774f6e8edb36'
+ assert old.count(b'formattable')==2
+ new=old.replace(b',formattable',b'');new+=b'\n'*(len(old)-len(new))
+ assert b'formattable' not in new and raw.count(old)==1
+ revised=raw.replace(old,new,1)
+ after=cpio_entries(revised,allow_duplicate_directories={'dev'})
+ for a,b in zip(entries,after):
+  if a[0]=='fstab.qcom':assert a[:2]==b[:2] and b[2]==new
+  else:assert a==b
+ assert len(raw)==len(revised)
+ assert 'androidboot.selinux=' not in cmdline
+ cmdline+=' androidboot.selinux=permissive'
+ ramdisk=gzip.compress(revised,compresslevel=9,mtime=0)
+ payload=original.rebuild(kernel=kernel,ramdisk=ramdisk,cmdline=cmdline)
+ signed=sign_image(payload,'/boot',str(ROOT/'keys/axon-m-local.key'),str(ROOT/'keys/axon-m-local.pem'))
+ checked=BootImage(signed);info=report(signed)
+ assert checked.payload==payload and checked.kernel==kernel and checked.ramdisk==ramdisk and checked.second==original.second
+ assert info['signature_verified'] and info['boot_id_valid'] and info['signature_target']=='/boot'
+ system=json.loads((ROOT/'test20-system-v1/manifest.json').read_text())
+ assert system['passed'] and system['image_sha256']==SYSTEM_SHA and system['automatic_format_flags_removed']
+ validation={'passed':True,'image_sha256':sha(signed),'bytes':len(signed),'target':'/boot',
+             'source_sha256':SOURCE_SHA,'source_cpio_sha256':sha(raw),'output_cpio_sha256':sha(revised),
+             'only_ramdisk_change':'Remove two first-stage formattable flags; pad same-size fstab with newlines.',
+             'all_other_cpio_records_including_duplicate_dev_byte_exact':True,
+             'first_stage_init_unchanged':True,'required_system_sha256':SYSTEM_SHA,
+             'kernel_component_sha256':sha(kernel),'kernel_validation':kreport,
+             'signature_verified':True,'boot_id_valid':True,'hardware_tested':False,
+             'requires_explicit_clean_userdata_install':True,'phone_operations':False}
+ control=(ROOT/'prepared/test-19-los-recovery-boot-adb-only.img').read_bytes();assert sha(control)==CONTROL_SHA
+ cboot=BootImage(control)
+ recovery=sign_image(cboot.payload,'/recovery',str(ROOT/'keys/axon-m-local.key'),str(ROOT/'keys/axon-m-local.pem'))
+ cinfo=report(recovery)
+ assert BootImage(recovery).payload==cboot.payload and cinfo['signature_verified'] and cinfo['boot_id_valid'] and cinfo['signature_target']=='/recovery'
+ cvalidation={'passed':True,'image_sha256':sha(recovery),'bytes':len(recovery),'target':'/recovery',
+              'source_sha256':CONTROL_SHA,'payload_byte_identical_to_working_test19':True,
+              'signature_target_only_changed':True,'signature_verified':True,'boot_id_valid':True,
+              'hardware_tested_in_boot_slot':True,'hardware_tested_in_recovery_slot':False,
+              'cache_logger_existing_test19_directory_will_not_be_overwritten':True,'phone_operations':False}
+ return signed,validation,info,recovery,cvalidation,cinfo
+
+def main():
+ os.umask(0o077)
+ out=ROOT/'test20-boot-v1';assert not out.exists();out.mkdir(mode=0o700)
+ signed,validation,info,recovery,cvalidation,cinfo=build()
+ for name,data,meta,details in [('boot',signed,validation,info),('recovery-control',recovery,cvalidation,cinfo)]:
+  (out/(name+'.img')).write_bytes(data)
+  (out/(name+'.validation.json')).write_text(json.dumps(meta,indent=2)+'\n')
+  (out/(name+'.report.json')).write_text(json.dumps(details,indent=2)+'\n')
+ print(json.dumps({'boot_sha256':sha(signed),'recovery_sha256':sha(recovery),'system_sha256':SYSTEM_SHA,'hardware_tested':False}),flush=True)
+if __name__=='__main__':main()

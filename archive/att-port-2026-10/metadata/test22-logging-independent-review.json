@@ -1,0 +1,90 @@
+{
+  "passed": true,
+  "manifest_sha256": "5703346aa80f38b5580932399c9b1f3e9d6f50c9566176589166a0d6e2fac35e",
+  "helper_sha256": "79d718ac3e30169321555da46dfefae1f933e3d9ef39944d7cfae64c18179899",
+  "reviewer": "independent full_adbd_audit agent",
+  "review_scope": "Read-only exact extraction/comparison and source ordering review. No builder or mock tests rerun.",
+  "checks": {
+    "/system/etc/init/hw/init.rc source_hash": true,
+    "/system/etc/init/hw/init.rc output_hash": true,
+    "/system/etc/init/hw/init.rc size": true,
+    "/system/etc/init/hw/init.rc changed_count": true,
+    "/system/etc/axon-diag-test20-collect.sh source_hash": true,
+    "/system/etc/axon-diag-test20-collect.sh output_hash": true,
+    "/system/etc/axon-diag-test20-collect.sh size": true,
+    "/system/etc/axon-diag-test20-collect.sh changed_count": true,
+    "/system/etc/axon-diag-test20-persist.sh source_hash": true,
+    "/system/etc/axon-diag-test20-persist.sh output_hash": true,
+    "/system/etc/axon-diag-test20-persist.sh size": true,
+    "/system/etc/axon-diag-test20-persist.sh changed_count": true,
+    "/system/etc/init/axon-diag-test20.rc source_hash": true,
+    "/system/etc/init/axon-diag-test20.rc output_hash": true,
+    "/system/etc/init/axon-diag-test20.rc size": true,
+    "/system/etc/init/axon-diag-test20.rc changed_count": true,
+    "exact_four_paths": true,
+    "main_exact_command_move": true,
+    "main_other_order_unchanged": true,
+    "collector_after_first_apex_config": true,
+    "save_once_first_in_postfs_before_vdc": true,
+    "fs_before_postfs": true,
+    "collect changes_only_runtime_identity": true,
+    "collect physical_self_path_preserved": true,
+    "collect runtime_ram_test22": true,
+    "persist changes_only_runtime_identity": true,
+    "persist physical_self_path_preserved": true,
+    "persist runtime_ram_test22": true,
+    "new_cache_destination": true,
+    "service_commands_permissions_unchanged": true,
+    "test22_physical_paths_absent": true,
+    "exact_test20_mount_all_in_fs": true,
+    "cache_is_not_latemount": true
+  },
+  "files": [
+    {
+      "filesystem_path": "/system/etc/init/hw/init.rc",
+      "source_sha256": "2bb5305bc450c032e84a0afb2c28e34801627fdf7a3b9965967d63925ae1f819",
+      "output_sha256": "54b68ef6f916ea888148665a0fd18b57ad9106f28f41e1686baea0eaf3876a69",
+      "bytes": 59871
+    },
+    {
+      "filesystem_path": "/system/etc/axon-diag-test20-collect.sh",
+      "source_sha256": "00f32d09dd3e2a9629c68fd22e3c1db145ee828a1771135e4a27cc3ff6d41560",
+      "output_sha256": "42b5c0e9d24dba1195e9c556422c0d5d8df47c339bb82dcfd55b62335dc17bfe",
+      "bytes": 6985
+    },
+    {
+      "filesystem_path": "/system/etc/axon-diag-test20-persist.sh",
+      "source_sha256": "b64797ddae3688a1a6fc25a26996b1593ba184128f8e5fae903dd6acd76b262e",
+      "output_sha256": "34082cdeba9965d2b89b9062c84debbd70d776698513bf0b075a976e3062f374",
+      "bytes": 3445
+    },
+    {
+      "filesystem_path": "/system/etc/init/axon-diag-test20.rc",
+      "source_sha256": "dc39d3f3df26d3245f526a173bd7d1721fe2b5cb177ced8788c2b8164e634b75",
+      "output_sha256": "a50ae2ff6de6fe962a4c7688c271da3921067c8169e73d7e9e5da34a2d0a4310",
+      "bytes": 438
+    }
+  ],
+  "source_image_sha256_from_existing_verified_manifest": "7c32f735219768f31444400c67cf996b5f80de4c17d0d1c1ed65a7d0acf0883a",
+  "timing_evidence": {
+    "main_late_init": "trigger fs immediately before trigger post-fs; init action queue completes fs actions before post-fs",
+    "vendor_init_target_sha256": "2cabd2dce5a76ea68cd1ee66efd71b530cf22cd1425b6b099d5afbc30face534",
+    "vendor_fstab_sha256": "054394e13e07abc4b32f700621320232447f829d67ea1846c7bfad9440086ec5",
+    "cache_mount": "Exact source has mount_all --early in on fs; /cache fstab entry is not latemount",
+    "save_start": "First command of main on post-fs, before blocking vdc checkpoint IPC",
+    "collector_start": "Retained immediately after first perform_apex_config in early-init"
+  },
+  "conclusions": [
+    "All four source and output hashes, sizes and changed-byte counts match manifest",
+    "Main init differs only by runtime identity rename and moving one save-start command; all other bytes after normalization and command order preserved",
+    "Collector and persister differ only in Test22 runtime identity; SELF and service executable paths retain original Test20 files",
+    "Cache identity/geometry/mount checks, bounded collection and persistence behavior remain exactly source-equivalent",
+    "No blocker found for local payload assembly"
+  ],
+  "limits": [
+    "Runtime not hardware-tested; fs failure still causes strict persister rejection",
+    "Separate image builder must preserve existing inode metadata/xattrs and verify payload placement",
+    "Review does not infer file inode preservation merely from flat payloads"
+  ],
+  "phone_or_image_operations": false
+}

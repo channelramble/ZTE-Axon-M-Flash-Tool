@@ -1,0 +1,65 @@
+#!/usr/bin/env python3
+"""Move Test11's physically observed synchronous marker immediately before flush."""
+import gzip,hashlib,json,os,struct,sys
+from pathlib import Path
+ROOT=Path(__file__).resolve().parent
+sys.path.insert(0,str(ROOT.parent/'ZTE-Axon-M-Flash-Tool/scripts'))
+from fujisan_image import BootImage,gzip_member,report,sign_image
+SHA=lambda b:hashlib.sha256(b).hexdigest()
+BASE=0xffffff8008080000
+HELPER=0xffffff80097866bc
+
+def bl(pc,target):
+    delta=target-pc
+    assert delta%4==0 and -(1<<27)<=delta<(1<<27)
+    return struct.pack('<I',0x94000000|((delta//4)&0x3ffffff))
+
+def main():
+    os.umask(0o077)
+    source=ROOT/'prepared/test-11-deferred-pulse-v3-boot-adb-only.img'
+    target=ROOT/'prepared/test-12-before-deferred-flush-boot-adb-only.img'
+    paths=[target,target.with_suffix('.validation.json'),target.with_suffix('.img.json')]
+    assert not any(p.exists() for p in paths)
+    data=source.read_bytes()
+    assert SHA(data)=='cf98afbfe9bd39cc7177ce35f95824a9fca93b2dd634f6288c42386ee7d5dda6'
+    boot=BootImage(data);_,raw,tail=gzip_member(boot.kernel)
+    assert SHA(raw)=='632a93b15311a5f1f3db4c9d7d38d7569ec6a8ecea2b6089853a8fd9db436b3d'
+    # Relocate the final marker, preserving X0 as the original flush argument.
+    patches=[(0xffffff800867ecd0,bytes.fromhex('60d647f9'),bl(0xffffff800867ecd0,HELPER)),
+             (0xffffff800867ecd8,bl(0xffffff800867ecd8,HELPER),bytes.fromhex('e0031f2a')),
+             (HELPER+20,bytes.fromhex('e0031f2a'),bytes.fromhex('60d647f9'))]
+    patched=bytearray(raw)
+    for pc,old,new in patches:
+        off=pc-BASE
+        assert raw[off:off+4]==old
+        patched[off:off+4]=new
+    # Decode the relocated load: LDR X0,[X19,#0xFA8], not a changed workqueue.
+    word=struct.unpack('<I',patches[-1][2])[0]
+    assert word&0xffc00000==0xf9400000 and word&31==0 and (word>>5)&31==19
+    assert ((word>>10)&0xfff)*8==0xfa8
+    assert patched[0x5feccc:0x5fecd0]==raw[0x5feccc:0x5fecd0] # original queue
+    assert patched[0x5fecd4:0x5fecd8]==raw[0x5fecd4:0x5fecd8] # original flush
+    assert patched[0x174be28:0x174d3b8]==raw[0x174be28:0x174d3b8]
+    changes=[i for i,(a,b) in enumerate(zip(raw,patched)) if a!=b]
+    assert changes and all(any(pc-BASE<=i<pc-BASE+4 for pc,_,_ in patches) for i in changes)
+    signed=sign_image(boot.rebuild(kernel=gzip.compress(bytes(patched),compresslevel=9,mtime=0)+tail),
+                      '/boot',str(ROOT/'keys/axon-m-local.key'),str(ROOT/'keys/axon-m-local.pem'))
+    new=BootImage(signed);_,checked,newtail=gzip_member(new.kernel)
+    assert checked==patched and newtail==tail and new.ramdisk==boot.ramdisk and new.cmdline==boot.cmdline
+    assert boot.rebuild(kernel=new.kernel)==new.payload
+    info=report(signed)
+    assert info['signature_verified'] and info['boot_id_valid'] and info['signature_target']=='/boot'
+    assert all(t['free_tail_bytes']==8192 for t in info['dtbs'])
+    v=dict(source_image=source.name,source_sha256=SHA(data),image=target.name,image_bytes=len(signed),
+           image_sha256=SHA(signed),padded_sha256=SHA(signed+b'\0'*(-len(signed)%512)),
+           raw_sha256=SHA(patched),changed_raw_bytes=len(changes),changed_raw_offsets=changes,
+           patches=[dict(address=hex(pc),old=old.hex(),new=new.hex()) for pc,old,new in patches],
+           original_queue_and_flush_preserved=True,flush_argument_load_preserved=True,
+           pre_enable_pulse_unchanged=True,all_690_initcalls_unchanged=True,
+           dt_ramdisk_cmdline_unchanged=True,signature_verified=True,boot_id_valid=True,hardware_tested=False,
+           interpretation='Complete red-green-red calibration pulse then green supports queue_work_on return and reaching the checkpoint before flush. Staying red remains conditional: enabled asynchronous deferred work may hang before the marker; a failing marker is also possible. This does not identify a driver or prove flush was entered. Original flush/queue/enable/disable and driver registration order stay intact; marker timing shifts.')
+    for p,b in [(paths[0],signed),(paths[1],(json.dumps(v,indent=2)+'\n').encode()),(paths[2],(json.dumps(info,indent=2)+'\n').encode())]:
+        with p.open('xb') as f:f.write(b)
+    print(json.dumps(v,indent=2))
+
+if __name__=='__main__':main()

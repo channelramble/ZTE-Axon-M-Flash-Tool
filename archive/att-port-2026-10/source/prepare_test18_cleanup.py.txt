@@ -1,0 +1,208 @@
+#!/usr/bin/env python3
+"""Local-only exact rollback of Test13 observability bypasses from Test17.
+
+Restore seven reviewed kernel sites; retain the after-async marker and all
+Test17 DT/USB changes. Only diagnostic output names change in the ramdisk.
+Never overwrite an artifact or access a phone, SSH, USB, or block device.
+"""
+import gzip
+import hashlib
+import json
+import os
+from pathlib import Path
+import struct
+import subprocess
+import sys
+
+sys.dont_write_bytecode = True
+ROOT = Path(__file__).resolve().parent
+sys.path.insert(0, str(ROOT.parent / 'ZTE-Axon-M-Flash-Tool/scripts'))
+from fujisan_image import BootImage, cpio_entries, gzip_member, report, sign_image
+
+BASE = 0xffffff8008080000
+SOURCE_NAME = 'test-17-usb-supplier-boot-adb-only.img'
+SOURCE_SHA = 'e122e26f40da384a96594cb4826ca5f29fb5c07991d690f12266400c9d4f35af'
+SOURCE_RAW_SHA = 'a88e1d1795a85f6ee9b0ca743ed7f45de36070d8f3bf1238547bb52a48f2447c'
+TARGET_NAME = 'test-18-cleanup-boot-adb-only.img'
+TARGET_RAW_SHA = '66833e48a3ae42833801f8919ac65bccf6211274671d5a58b0d7f1e7ad81cc41'
+RAW_BYTES = 26843168
+DIAGNOSTICS = ('init.rc', 'sbin/axon-diag-collect.sh', 'sbin/axon-diag-persist.sh')
+SITES = (
+    ('preflush_argument_load', 0x5fecd0, '7b1e4494', '60d647f9'),
+    ('shared_deferred_flush', 0x5fecd4, 'b91e4494', 'd213e997'),
+    ('late_deferred_flush', 0x5fed98, '881e4494', 'a113e997'),
+    ('free_initmem_call', 0xfc453c, '1f2003d5', '335dc197'),
+    ('regulator_init_complete_index686', 0x174d398, '7466780980ffffff', 'f090780980ffffff'),
+    ('regulator_proxy_consumer_remove_all_index687', 0x174d3a0, '7466780980ffffff', '7093780980ffffff'),
+    ('clock_late_init_index688', 0x174d3a8, '7466780980ffffff', '70137a0980ffffff'),
+)
+
+
+def sha(data):
+    return hashlib.sha256(data).hexdigest()
+
+
+def require(condition, message):
+    if not condition:
+        raise ValueError(message)
+
+
+def restore_kernel(raw):
+    require(len(raw) == RAW_BYTES and sha(raw) == SOURCE_RAW_SHA, 'Unexpected Test17 raw kernel')
+    patched = bytearray(raw)
+    allowed = set()
+    for name, offset, before_hex, after_hex in SITES:
+        before, after = bytes.fromhex(before_hex), bytes.fromhex(after_hex)
+        require(len(before) == len(after) and raw[offset:offset + len(before)] == before,
+                'Reviewed source bytes differ: ' + name)
+        patched[offset:offset + len(after)] = after
+        allowed.update(range(offset, offset + len(after)))
+    differences = [offset for offset, (a, b) in enumerate(zip(raw, patched)) if a != b]
+    require(len(differences) == 23 and set(differences) <= allowed,
+            'Kernel changed outside the seven reviewed rollback sites')
+    require(sha(patched) == TARGET_RAW_SHA, 'Restored raw kernel hash differs from independent review')
+    # After-async helper returns to the restored free_initmem call. Its helper
+    # and pre-enable calibration pulse remain exact; preflush marker is removed.
+    require(patched[0xfc4538:0xfc453c] == bytes.fromhex('ac081d94')
+            and patched[0x5fec48:0x5fec4c] == bytes.fromhex('8d1e4494')
+            and patched[0x17067e8:0x1706804] == raw[0x17067e8:0x1706804],
+            'A preserved LED checkpoint changed')
+    cave_lo, cave_hi = 0xffffff8009786674, 0xffffff800978684c
+    calls = []
+    for offset in range(0, len(patched) - 3, 4):
+        word = struct.unpack_from('<I', patched, offset)[0]
+        if word & 0x7c000000 != 0x14000000:
+            continue
+        delta = word & 0x3ffffff
+        delta -= 1 << 26 if delta & (1 << 25) else 0
+        target = BASE + offset + 4 * delta
+        if cave_lo <= target < cave_hi and not cave_lo <= BASE + offset < cave_hi:
+            calls.append((BASE + offset, target))
+    require(calls == [(0xffffff800867ec48, 0xffffff800978667c),
+                      (0xffffff8009044538, 0xffffff80097867e8)],
+            'Unexpected external branch into the diagnostic init-memory helper')
+    return bytes(patched), differences, calls
+
+
+def encode(name, fields, content, original):
+    fields = list(fields)
+    fields[6] = len(content)
+    if original[:6] == b'070702':
+        fields[12] = sum(content) & 0xffffffff
+    head = original[:6] + ''.join(f'{field:08x}' for field in fields).encode() + name.encode() + b'\0'
+    encoded = head + b'\0' * (-len(head) % 4) + content
+    return encoded + b'\0' * (-len(encoded) % 4)
+
+
+def rename_diagnostics(ramdisk):
+    _, raw, tail = gzip_member(ramdisk)
+    require(not tail, 'Unexpected ramdisk gzip trailer')
+    before = cpio_entries(raw)
+    names = [entry[0] for entry in before]
+    require(all(names.count(name) == 1 for name in DIAGNOSTICS), 'Expected three exact diagnostic entries')
+    packed = bytearray()
+    hashes = {}
+    for name, fields, content, original in before:
+        if name not in DIAGNOSTICS:
+            packed.extend(original)
+            continue
+        changed = content.replace(b'Test17', b'Test18').replace(b'test17', b'test18')
+        require(changed != content and b'Test17' not in changed and b'test17' not in changed,
+                'Diagnostic naming change incomplete: ' + name)
+        require(fields[1] & 0o170000 == 0o100000 and fields[4] == 1,
+                'Diagnostic entry must be a regular file without hardlinks')
+        if name != 'init.rc':
+            checked = subprocess.run(['/bin/sh', '-n'], input=changed, capture_output=True, check=False)
+            require(checked.returncode == 0, 'Diagnostic shell syntax failed')
+        hashes[name] = {'before': sha(content), 'after': sha(changed)}
+        packed.extend(encode(name, fields, changed, original))
+    packed.extend(b'\0' * (-len(packed) % 512))
+    after = cpio_entries(bytes(packed))
+    require([entry[0] for entry in after] == names, 'Ramdisk membership/order changed')
+    for old, new in zip(before, after):
+        if old[0] not in DIAGNOSTICS:
+            require(old == new, 'An unrelated encoded CPIO entry changed')
+        else:
+            require(new[2] == old[2].replace(b'Test17', b'Test18').replace(b'test17', b'test18'),
+                    'Diagnostic changes exceed renaming')
+            old_fields, new_fields = list(old[1]), list(new[1])
+            old_fields[6] = new_fields[6]
+            if old[3][:6] == b'070702':
+                old_fields[12] = new_fields[12]
+            require(old_fields == new_fields, 'Diagnostic CPIO metadata changed')
+    checked = subprocess.run(['/usr/bin/cpio', '-it'], input=bytes(packed), capture_output=True, check=False)
+    require(checked.returncode == 0, 'External cpio rejected renamed diagnostic ramdisk')
+    result = gzip.compress(bytes(packed), compresslevel=9, mtime=0)
+    require(cpio_entries(gzip_member(result)[1]) == after, 'Recompressed ramdisk differs')
+    return result, hashes
+
+
+def main():
+    os.umask(0o077)
+    destination = ROOT / 'prepared' / TARGET_NAME
+    outputs = (destination, destination.with_suffix('.validation.json'), destination.with_suffix('.img.json'))
+    require(not any(path.exists() or path.is_symlink() for path in outputs),
+            'An immutable Test18 artifact already exists')
+    data = (ROOT / 'prepared' / SOURCE_NAME).read_bytes()
+    require(sha(data) == SOURCE_SHA, 'Source must be the exact verified Test17 image')
+    boot = BootImage(data)
+    source_info = report(data)
+    require(source_info['signature_verified'] and source_info['boot_id_valid']
+            and source_info['signature_target'] == '/boot'
+            and len(data) == boot.payload_length + source_info['signature_bytes'],
+            'Test17 source signature, boot ID or exact length differs')
+    _, raw, tail = gzip_member(boot.kernel)
+    patched, differences, calls = restore_kernel(raw)
+    kernel = gzip.compress(patched, compresslevel=9, mtime=0) + tail
+    ramdisk, hashes = rename_diagnostics(boot.ramdisk)
+    signed = sign_image(boot.rebuild(kernel=kernel, ramdisk=ramdisk), '/boot',
+                        str(ROOT / 'keys/axon-m-local.key'), str(ROOT / 'keys/axon-m-local.pem'))
+    new = BootImage(signed)
+    _, final_raw, final_tail = gzip_member(new.kernel)
+    require(final_raw == patched and final_tail == tail and new.ramdisk == ramdisk
+            and new.cmdline == boot.cmdline and new.second == boot.second
+            and boot.rebuild(kernel=new.kernel, ramdisk=new.ramdisk) == new.payload,
+            'Final image differs from the reviewed kernel/ramdisk-only changes')
+    info = report(signed)
+    require(info['signature_verified'] and info['boot_id_valid'] and info['signature_target'] == '/boot'
+            and len(signed) == new.payload_length + info['signature_bytes'],
+            'Final signature, boot ID or exact-length validation failed')
+    require(info['dtbs'] == source_info['dtbs'], 'Appended DTBs changed')
+    padded = signed + b'\0' * (-len(signed) % 512)
+    validation = {
+        'source_image': SOURCE_NAME, 'source_sha256': SOURCE_SHA,
+        'image': TARGET_NAME, 'image_sha256': sha(signed), 'image_bytes': len(signed),
+        'padded_sha256': sha(padded), 'padded_bytes': len(padded),
+        'source_raw_sha256': SOURCE_RAW_SHA, 'raw_sha256': sha(patched),
+        'changed_raw_bytes': len(differences), 'changed_raw_offsets': differences,
+        'restored_sites': [dict(name=name, offset=hex(offset), address=hex(BASE + offset),
+                                before=before, after=after) for name, offset, before, after in SITES],
+        'kernel_other_bytes_exact': True,
+        'original_deferred_flushes_and_free_initmem_restored': True,
+        'late_cleanup_indices_restored': [686, 687, 688],
+        'preflush_marker_removed_original_load_restored': True,
+        'after_async_marker_and_pre_enable_calibration_unchanged': True,
+        'remaining_external_helper_branches': [{'address': hex(a), 'target': hex(t)} for a, t in calls],
+        'dt_tail_byte_exact_to_test17': True, 'dtbs': info['dtbs'],
+        'ramdisk_changed_files': list(DIAGNOSTICS), 'diagnostic_files_sha256': hashes,
+        'ramdisk_changes_only_Test17_to_Test18_names': True,
+        'all_other_encoded_cpio_entries_exact': True,
+        'diagnostic_output_directory': '/axon-diag-test18',
+        'usb_rc_charger_cmdline_load_addresses_unchanged': True,
+        'shell_syntax_and_external_cpio_valid': True,
+        'signature_verified': True, 'boot_id_valid': True, 'hardware_tested': False,
+        'interpretation': 'Restore normal deferred waits, init-memory release and three late power/clock cleanups after the Test17 USB supplier fix. Keep the post-async marker and all other prior diagnostics unchanged. Hardware testing must verify cleanup does not expose unvoted resources or another outstanding probe problem.'
+    }
+    blobs = (signed, (json.dumps(validation, indent=2) + '\n').encode(),
+             (json.dumps(info, indent=2) + '\n').encode())
+    for path, blob in zip(outputs, blobs):
+        with path.open('xb') as stream:
+            stream.write(blob)
+            stream.flush()
+            os.fsync(stream.fileno())
+    print(json.dumps({key: value for key, value in validation.items()
+                      if key not in ('changed_raw_offsets', 'diagnostic_files_sha256', 'dtbs')}, indent=2))
+
+
+if __name__ == '__main__':
+    main()

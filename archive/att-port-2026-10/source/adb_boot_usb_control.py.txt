@@ -1,0 +1,284 @@
+#!/usr/bin/env python3
+"""Apply one ramdisk-only USB fix to the proven 3.18 boot-slot reader.
+
+Default: files-only validation. --execute allows exactly one boot write, with
+full-partition before/after evidence. No recovery/misc writes or reboot exist.
+The already reviewed adb transport is imported without changing that writer.
+"""
+import argparse
+import json
+import os
+from pathlib import Path
+import re
+import shlex
+import signal
+import struct
+import sys
+import time
+
+import adb_recovery_control as base
+from adb_recovery_control import (BACKUPS, GEOMETRY, SECTOR, TRANSACTION_TIMEOUT,
+                                  BootImage, digest, file_hash, read_gpt, report,
+                                  save_state)
+
+SOURCE_BYTES = base.BOOT_BYTES
+SOURCE_SHA = base.BOOT_SHA
+SOURCE_PADDED_SHA = base.BOOT_PADDED_SHA
+PREVIOUS_BYTES = 26178611
+PREVIOUS_SHA = '2bdf23078453af1eaca576b3f89fcd5875200c935cc8778219399a8bad558700'
+PREVIOUS_PADDED_SHA = '2d4a33946e671523939b7c2e9b2021c45a6545ec3fa87a9815424c3fbfbd4993'
+CURRENT_BOOT_SHA = '90951626241b982df7d845b8528bc0fe4539396055ee9afb0fbbe46dea2b4595'
+CURRENT_RECOVERY_SHA = '29b5052e639b46c2ea08c2cbdae59ecbb2e4a38b97f7b4e703019db83434cff8'
+PARTITION_BYTES = 67108864
+
+
+def pinned_file(path, size, sha, label):
+    data = Path(path).read_bytes()
+    if len(data) != size or digest(data) != sha:
+        raise ValueError(label + ' does not match the pinned length/hash')
+    return data
+
+
+def original_backups(directory):
+    directory = Path(directory)
+    manifest = json.loads((directory / 'backup-manifest.json').read_text())
+    for name, (size, expected_hash) in BACKUPS.items():
+        item = manifest['files'][name]
+        file = directory / name
+        if (item['bytes'] != size or item['sha256'] != expected_hash
+                or file.stat().st_size != size or file_hash(file) != expected_hash):
+            raise ValueError('Original full backup verification failed: ' + name)
+    primary = (directory / 'gpt_main0.bin').read_bytes()
+    gpt = read_gpt(primary)
+    array_lba = struct.unpack_from('<Q', primary, SECTOR + 72)[0]
+    entry_bytes = struct.unpack_from('<I', primary, SECTOR + 84)[0]
+    for name, (node, start, sectors) in GEOMETRY.items():
+        part = gpt['partitions'][name]
+        if (part['start_sector'], part['sectors']) != (start, sectors):
+            raise ValueError('Unexpected GPT geometry: ' + name)
+        index = int(node.removeprefix('mmcblk0p')) - 1
+        offset = array_lba * SECTOR + index * entry_bytes
+        entry_name = primary[offset + 56:offset + 128].decode('utf-16-le').split('\0', 1)[0]
+        if entry_name != name:
+            raise ValueError('GPT entry number differs from fixed Linux node')
+    if any((directory / 'misc.bin').read_bytes()):
+        raise ValueError('Expected unchanged entirely zero misc backup')
+    return primary
+
+
+def reconstruct_current_boot(source, previous, original):
+    """Each prior write replaced only its sector-padded prefix, without erase."""
+    if len(source) != SOURCE_BYTES or digest(source) != SOURCE_SHA:
+        raise ValueError('Source boot control is not pinned test 06')
+    if len(previous) != PREVIOUS_BYTES or digest(previous) != PREVIOUS_SHA:
+        raise ValueError('Previous boot image is not pinned test 05')
+    if len(original) != PARTITION_BYTES or digest(original) != BACKUPS['boot.bin'][1]:
+        raise ValueError('Original full boot backup differs')
+    source_padded = source + b'\0' * (-len(source) % SECTOR)
+    previous_padded = previous + b'\0' * (-len(previous) % SECTOR)
+    if digest(source_padded) != SOURCE_PADDED_SHA or digest(previous_padded) != PREVIOUS_PADDED_SHA:
+        raise ValueError('A historical padded image hash differs')
+    if not len(source_padded) < len(previous_padded) < len(original):
+        raise ValueError('Unexpected historical boot lengths')
+    current = source_padded + previous_padded[len(source_padded):] + original[len(previous_padded):]
+    if digest(current) != CURRENT_BOOT_SHA:
+        raise ValueError('Reconstructed current full boot differs from pinned transaction history')
+    return current
+
+
+def load_plan(path):
+    plan = json.loads(Path(path).read_text())
+    required = {'partition', 'image', 'image_sha256', 'backups', 'source_boot',
+                'previous_boot', 'current_recovery', 'output'}
+    if not required <= set(plan) or set(plan) - required - {'adb'}:
+        raise ValueError('Unexpected or missing boot USB-control plan fields')
+    if plan['partition'] != 'boot':
+        raise ValueError('Only boot is permitted')
+    for field in required - {'partition', 'image_sha256'}:
+        if not isinstance(plan[field], str) or not Path(plan[field]).is_absolute():
+            raise ValueError(field + ' must be an absolute path')
+    expected_adb = Path.home() / base.ADB_RELATIVE
+    if 'adb' in plan and Path(plan['adb']) != expected_adb:
+        raise ValueError('Only the separately installed adb 29.0.6 is permitted')
+    plan['adb'] = str(expected_adb)
+    if not isinstance(plan['image_sha256'], str) or not re.fullmatch('[0-9a-f]{64}', plan['image_sha256']):
+        raise ValueError('Expected an exact candidate SHA-256')
+    primary = original_backups(plan['backups'])
+    source = pinned_file(plan['source_boot'], SOURCE_BYTES, SOURCE_SHA, 'Source boot')
+    previous = pinned_file(plan['previous_boot'], PREVIOUS_BYTES, PREVIOUS_SHA, 'Previous boot')
+    original = (Path(plan['backups']) / 'boot.bin').read_bytes()
+    current_boot = reconstruct_current_boot(source, previous, original)
+    current_recovery = pinned_file(plan['current_recovery'], PARTITION_BYTES,
+                                   CURRENT_RECOVERY_SHA, 'Current marked recovery backup')
+    image = Path(plan['image']).read_bytes()
+    if digest(image) != plan['image_sha256']:
+        raise ValueError('Candidate hash differs from plan')
+    info = report(image)
+    boot, original_boot = BootImage(image), BootImage(source)
+    if (not info['signature_verified'] or info['signature_target'] != '/boot'
+            or not boot.id_valid or len(image) != boot.payload_length + info['signature_bytes']):
+        raise ValueError('Expected a valid exact-length /boot-signed image')
+    if (boot.kernel != original_boot.kernel or boot.cmdline != original_boot.cmdline
+            or boot.second != original_boot.second
+            or original_boot.rebuild(ramdisk=boot.ramdisk) != boot.payload):
+        raise ValueError('Only the ramdisk may differ from the proven 3.18 boot image')
+    if boot.ramdisk == original_boot.ramdisk:
+        raise ValueError('Candidate must contain the intended ramdisk USB fix')
+    padded = image + b'\0' * (-len(image) % SECTOR)
+    if not 0 < len(padded) <= PARTITION_BYTES:
+        raise ValueError('Candidate exceeds boot partition')
+    return plan, image, padded, primary, current_boot, current_recovery
+
+
+class AdbBootUSB(base.AdbRecovery):
+    def make_workspace(self):
+        self.workspace = '/tmp/axon-boot-usb-control-' + base.secrets.token_hex(12)
+        self.shell('umask 077\nmkdir ' + shlex.quote(self.workspace), 'workspace-create')
+        return self.workspace
+
+    def capture(self, kind, path):
+        if kind != 'boot':
+            return super().capture(kind, path)
+        if self.workspace is None:
+            raise ValueError('Missing private workspace')
+        path = Path(path)
+        if path.exists() or not re.fullmatch('[a-z0-9-]+\.bin', path.name):
+            raise ValueError('Capture destination must be new with a fixed safe name')
+        remote = self.workspace + '/' + path.name
+        command = ('dd if=/dev/block/mmcblk0p18 of=' + shlex.quote(remote)
+                   + ' bs=512 count=131072 2>' + shlex.quote(remote + '.dd.log')
+                   + '\nwc -c < ' + shlex.quote(remote))
+        if self.shell(command, 'capture-' + path.name).strip() != str(PARTITION_BYTES):
+            raise ValueError('Short device-side full boot capture')
+        partial = path.with_suffix('.part')
+        if partial.exists():
+            raise FileExistsError('Partial capture already exists')
+        self._run(['pull', remote, str(partial)], 'pull-' + path.name)
+        if partial.stat().st_size != PARTITION_BYTES:
+            raise ValueError('Short pulled full boot capture')
+        os.link(partial, path)
+        partial.unlink()
+
+    def write_recovery(self):
+        raise RuntimeError('Recovery writes are unavailable in the boot USB writer')
+
+    def write_boot(self):
+        if self.armed_length is None:
+            raise RuntimeError('Boot write has not been explicitly armed')
+        sectors = self.armed_length // SECTOR
+        self.armed_length = None
+        self.write_attempted = True
+        self.shell('dd if=' + shlex.quote(self.stage_path)
+                   + ' of=/dev/block/mmcblk0p18 bs=512 count=' + str(sectors)
+                   + ' conv=notrunc\nsync', 'WRITE-boot-only')
+
+
+def execute(plan, image, padded, primary, current_boot, current_recovery, client_factory=AdbBootUSB):
+    output = Path(plan['output'])
+    output.mkdir(mode=0o700, parents=True, exist_ok=False)
+    state_file = output / 'transaction.json'
+    state = {'partition': 'boot', 'node': '/dev/block/mmcblk0p18',
+             'start_sector': 1050624, 'partition_sectors': 131072,
+             'write_sectors': len(padded) // SECTOR, 'image_bytes': len(image),
+             'image_sha256': digest(image), 'padded_sha256': digest(padded),
+             'expected_before_boot_sha256': digest(current_boot),
+             'expected_recovery_sha256': CURRENT_RECOVERY_SHA,
+             'phase': 'created', 'write_started': False, 'write_completed': False,
+             'readback_verified': False, 'reset_sent': False}
+
+    def phase(name, **values):
+        state.update(values)
+        state['phase'] = name
+        save_state(state_file, state)
+
+    phase('created')
+    client = None
+    try:
+        client = client_factory(plan['adb'], output, time.monotonic() + TRANSACTION_TIMEOUT)
+        identity, geometry = client.identity(), client.geometry()
+        phase('identity_verified', identity=identity, geometry=geometry)
+        phase('workspace_created', device_workspace=client.make_workspace())
+        for kind in ('gpt', 'boot', 'recovery', 'misc'):
+            client.capture(kind, output / (kind + '-before.bin'))
+        fresh_gpt = (output / 'gpt-before.bin').read_bytes()
+        read_gpt(fresh_gpt)
+        if fresh_gpt != primary:
+            raise ValueError('Fresh GPT differs from original; no write permitted')
+        before_boot = (output / 'boot-before.bin').read_bytes()
+        if before_boot != current_boot:
+            raise ValueError('Current full boot differs from reconstructed test 06 state; no write permitted')
+        if (output / 'recovery-before.bin').read_bytes() != current_recovery:
+            raise ValueError('Current full recovery differs from marked recovery control; no write permitted')
+        misc = (output / 'misc-before.bin').read_bytes()
+        if len(misc) != BACKUPS['misc.bin'][0] or digest(misc) != BACKUPS['misc.bin'][1]:
+            raise ValueError('Fresh misc differs from original zero backup; no write permitted')
+        phase('preflight_verified', full_before_boot_sha256=digest(before_boot),
+              current_recovery_sha256=CURRENT_RECOVERY_SHA, misc_sha256=digest(misc))
+        candidate = output / 'candidate-padded.bin'
+        with candidate.open('xb') as stream:
+            stream.write(padded)
+            stream.flush()
+            os.fsync(stream.fileno())
+        client.stage(candidate, digest(padded), len(padded))
+        client.geometry()
+        phase('candidate_staged')
+        client.arm(len(padded))
+        phase('write_started', write_started=True)
+        client.write_boot()
+        phase('write_completed', write_completed=True)
+        for kind in ('boot', 'recovery', 'misc'):
+            client.capture(kind, output / (kind + '-after.bin'))
+        after_boot = (output / 'boot-after.bin').read_bytes()
+        expected_boot = padded + before_boot[len(padded):]
+        if (len(after_boot) != PARTITION_BYTES or after_boot != expected_boot
+                or digest(after_boot[:len(image)]) != digest(image)
+                or digest(after_boot[:len(padded)]) != digest(padded)):
+            raise ValueError('Full boot readback mismatch; no reboot or retry')
+        phase('boot_readback_verified', full_boot_sha256=digest(after_boot), boot_tail_unchanged=True)
+        if (output / 'recovery-after.bin').read_bytes() != current_recovery:
+            raise ValueError('Recovery changed after boot write; no reboot or retry')
+        if (output / 'misc-after.bin').read_bytes() != misc:
+            raise ValueError('Misc changed after boot write; no reboot or retry')
+        phase('complete', readback_verified=True, misc_unchanged=True, recovery_unchanged=True)
+        return state
+    except BaseException as exc:
+        message = str(exc)
+        if client is not None and getattr(client, 'serial', None):
+            message = message.replace(client.serial, '<bound-device>')
+        phase('error', failed_phase=state['phase'], error=type(exc).__name__ + ': ' + message)
+        raise RuntimeError(state['error']) from None
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('plan', type=Path)
+    parser.add_argument('--execute', action='store_true')
+    args = parser.parse_args(argv)
+    os.umask(0o077)
+    values = load_plan(args.plan)
+    plan, image, padded, primary, current_boot, current_recovery = values
+    print(json.dumps({'file_preflight_passed': True, 'partition': 'boot',
+                      'image_sha256': digest(image), 'image_bytes': len(image),
+                      'current_full_boot_sha256': digest(current_boot),
+                      'current_full_recovery_sha256': digest(current_recovery),
+                      'write_sectors': len(padded) // SECTOR, 'execute': args.execute}), flush=True)
+    if args.execute:
+        def alarm(signum, frame):
+            raise TimeoutError('Whole transaction deadline reached; no retry or reboot')
+        previous = signal.signal(signal.SIGALRM, alarm)
+        signal.alarm(TRANSACTION_TIMEOUT)
+        try:
+            print(json.dumps(execute(*values)), flush=True)
+        finally:
+            signal.alarm(0)
+            signal.signal(signal.SIGALRM, previous)
+    return 0
+
+
+if __name__ == '__main__':
+    try:
+        sys.exit(main())
+    except Exception as exc:
+        print(json.dumps({'error': type(exc).__name__ + ': ' + str(exc),
+                          'reset_sent': False}), file=sys.stderr)
+        sys.exit(1)

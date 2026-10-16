@@ -1,0 +1,296 @@
+#!/usr/bin/env python3
+"""Offline safety tests. No adb, SSH, USB, or phone commands are executed."""
+import contextlib
+import io
+import json
+from pathlib import Path
+import shutil
+import subprocess
+import tempfile
+import time
+import unittest
+from unittest.mock import Mock, patch
+
+import adb_recovery_control as writer
+
+ROOT = Path(__file__).resolve().parent
+PLAN = ROOT / 'reader-recovery-control-local-plan.json'
+BOOT_IMAGE = ROOT / 'prepared/reader-3.2.3-boot.img'
+
+
+def geometry_lines():
+    values = {'disk_target': '/dev/block/mmcblk0', 'disk_sector': '512'}
+    for name, (node, start, sectors) in writer.GEOMETRY.items():
+        values.update({name + '_target': '/dev/block/' + node,
+                       name + '_node': '/dev/block/' + node,
+                       name + '_start': str(start), name + '_size': str(sectors)})
+    return [element for pair in values.items() for element in pair]
+
+
+class FakeRecovery:
+    """File-only device with selectable faults before/during/after its sole write."""
+    def __init__(self, backups, boot, fault=None):
+        self.backups, self.boot, self.fault = Path(backups), boot, fault
+        self.serial = 'PRIVATE_TEST_SERIAL'
+        self.writes = 0
+        self.staged = None
+        self.armed = None
+        self.geometry_calls = 0
+
+    def identity(self):
+        return {'kernel_release': '3.18.71lineageos-test', 'twrp_version': '3.2.3-0'}
+
+    def geometry(self):
+        self.geometry_calls += 1
+        if self.fault == 'late-geometry' and self.geometry_calls == 2:
+            raise ValueError('Geometry changed before write')
+        return writer.validate_geometry(geometry_lines())
+
+    def make_workspace(self):
+        return '/tmp/axon-recovery-control-OFFLINE'
+
+    def capture(self, kind, path):
+        if kind == 'boot':
+            path.write_bytes(self.boot)
+        else:
+            source = 'gpt_main0.bin' if kind == 'gpt' else kind + '.bin'
+            shutil.copyfile(self.backups / source, path)
+        if path.name == 'recovery-after.bin':
+            with path.open('r+b') as stream:
+                stream.write(self.staged)
+        if self.fault == path.stem:
+            with path.open('r+b') as stream:
+                stream.seek(-1, 2)
+                old = stream.read(1)
+                stream.seek(-1, 2)
+                stream.write(bytes([old[0] ^ 1]))
+
+    def stage(self, source, expected_hash, expected_bytes):
+        self.staged = source.read_bytes()
+        if self.fault == 'stage':
+            raise ValueError('Device-staged image length/hash mismatch')
+        assert len(self.staged) == expected_bytes
+        assert writer.digest(self.staged) == expected_hash
+
+    def arm(self, length):
+        assert length == len(self.staged)
+        self.armed = length
+
+    def write_recovery(self):
+        assert self.armed == len(self.staged)
+        self.writes += 1
+        self.armed = None
+        if self.fault == 'write':
+            raise TimeoutError('Uncertain write PRIVATE_TEST_SERIAL')
+
+
+class RecoveryWriterTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.plan, cls.image, cls.padded, cls.gpt = writer.load_plan(PLAN)
+        boot = BOOT_IMAGE.read_bytes()
+        cls.boot = boot + b'\0' * (-len(boot) % 512)
+        assert writer.digest(cls.boot) == writer.BOOT_PADDED_SHA
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix='axon-control-offline-')
+        self.directory = Path(self.temp.name)
+
+    def tearDown(self):
+        self.temp.cleanup()
+
+    def plan_file(self, **updates):
+        plan = json.loads(PLAN.read_text())
+        plan.update(updates)
+        path = self.directory / 'plan.json'
+        path.write_text(json.dumps(plan))
+        return path
+
+    def transaction(self, fault=None):
+        plan = dict(self.plan, output=str(self.directory / 'transaction'))
+        fake = FakeRecovery(plan['backups'], self.boot, fault)
+        return plan, fake
+
+    def execute_fake(self, plan, fake):
+        # Any accidental real transport would fail the test before spawning it.
+        with patch.object(writer.subprocess, 'Popen', side_effect=AssertionError('No real processes')):
+            return writer.execute(plan, self.image, self.padded, self.gpt,
+                                  client_factory=lambda *args: fake)
+
+    def test_actual_file_preflight_candidate(self):
+        self.assertEqual(writer.digest(self.image), '6850d87358bb4d46861b83a4c9f88b0fe57e41e6aa0f542e0e615e1b90bcf56b')
+        self.assertEqual(writer.digest(self.padded), 'f4ddb5f137977f1fa6410f11e48e20ed35e119c8eb21fc72e122ecfe20622384')
+        self.assertEqual(len(self.gpt), 14 * 512)
+        self.assertEqual(len(self.padded) % 512, 0)
+
+    def test_default_main_never_calls_transport_or_creates_output(self):
+        output = self.directory / 'preflight-only'
+        path = self.plan_file(output=str(output))
+        with patch.object(writer, 'execute', side_effect=AssertionError('Unexpected execute')):
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(writer.main([str(path)]), 0)
+        self.assertFalse(output.exists())
+
+    def test_plan_rejects_wrong_target_and_hash(self):
+        for values in ({'partition': 'boot'}, {'image_sha256': '0' * 64},
+                       {'adb': '/usr/bin/adb'}, {'output': 'relative'}):
+            with self.subTest(values=values), self.assertRaises(ValueError):
+                writer.load_plan(self.plan_file(**values))
+
+    def test_boot_signature_cannot_be_used_for_recovery(self):
+        with self.assertRaisesRegex(ValueError, '/recovery-signed'):
+            writer.load_plan(self.plan_file(image=str(BOOT_IMAGE), image_sha256=writer.BOOT_SHA))
+
+    def test_trailer_or_image_corruption_rejected(self):
+        for name, data in [('trailer', self.image + b'extra'),
+                           ('signature', self.image[:-1] + bytes([self.image[-1] ^ 1]))]:
+            with self.subTest(name=name):
+                candidate = self.directory / (name + '.img')
+                candidate.write_bytes(data)
+                with self.assertRaises(ValueError):
+                    writer.load_plan(self.plan_file(image=str(candidate), image_sha256=writer.digest(data)))
+
+    def test_every_original_manifest_entry_is_pinned(self):
+        backups = self.directory / 'backups'
+        backups.mkdir()
+        original = Path(self.plan['backups'])
+        manifest = json.loads((original / 'backup-manifest.json').read_text())
+        for name in writer.BACKUPS:
+            (backups / name).symlink_to(original / name)
+        for name in writer.BACKUPS:
+            changed = json.loads(json.dumps(manifest))
+            changed['files'][name]['sha256'] = '0' * 64
+            (backups / 'backup-manifest.json').write_text(json.dumps(changed))
+            with self.subTest(name=name), self.assertRaisesRegex(ValueError, 'backup verification failed'):
+                writer.load_plan(self.plan_file(backups=str(backups)))
+
+    def test_inventory_requires_one_recovery_device_without_exposing_serial(self):
+        good = b'List of devices attached\nPRIVATE_ID\trecovery\n\n'
+        self.assertEqual(writer.select_serial(good), 'PRIVATE_ID')
+        for data in (b'List of devices attached\n', good + b'ANOTHER_ID\trecovery\n',
+                     good.replace(b'recovery', b'device'), good.replace(b'recovery', b'unauthorized')):
+            with self.subTest(data=data):
+                with self.assertRaises(ValueError) as error:
+                    writer.select_serial(data)
+                self.assertNotIn('PRIVATE_ID', str(error.exception))
+                self.assertNotIn('ANOTHER_ID', str(error.exception))
+
+    def test_shell_frame_accepts_external_prop_noise_and_rejects_bad_results(self):
+        good = b'propClient warning\r\nTOKEN_BEGIN\r\n512\r\n\r\nTOKEN_RC:0\r\n'
+        self.assertEqual(writer.parse_frame(good, 'TOKEN'), b'512')
+        for data in (good.replace(b'RC:0', b'RC:1'), good + b'noise',
+                     good + good, b'512', good.replace(b'BEGIN', b'NOPE')):
+            with self.subTest(data=data), self.assertRaises(ValueError):
+                writer.parse_frame(data, 'TOKEN')
+
+    def test_geometry_detects_wrong_alias_or_partition_size(self):
+        lines = geometry_lines()
+        self.assertEqual(writer.validate_geometry(lines)['recovery_start'], '1181696')
+        for label, wrong in [('recovery_target', '/dev/block/mmcblk0p18'),
+                             ('recovery_node', '/dev/block/mmcblk1p19'),
+                             ('recovery_start', '1050624'), ('misc_size', '4096'),
+                             ('disk_sector', '4096')]:
+            changed = list(lines)
+            changed[changed.index(label) + 1] = wrong
+            with self.subTest(label=label), self.assertRaises(ValueError):
+                writer.validate_geometry(changed)
+
+    def test_success_verifies_full_recovery_tail_boot_and_misc(self):
+        plan, fake = self.transaction()
+        result = self.execute_fake(plan, fake)
+        self.assertEqual(fake.writes, 1)
+        self.assertEqual(fake.geometry_calls, 2)
+        self.assertEqual(result['phase'], 'complete')
+        for flag in ('write_started', 'write_completed', 'readback_verified',
+                     'recovery_tail_unchanged', 'misc_unchanged', 'boot_prefix_unchanged'):
+            self.assertTrue(result[flag])
+        self.assertFalse(result['reset_sent'])
+        self.assertEqual(json.loads((Path(plan['output']) / 'transaction.json').read_text()), result)
+
+    def test_all_fresh_read_or_stage_mismatches_block_write(self):
+        for fault in ('gpt-before', 'recovery-before', 'misc-before', 'boot-before',
+                      'stage', 'late-geometry'):
+            with self.subTest(fault=fault):
+                plan, fake = self.transaction(fault)
+                plan['output'] += '-' + fault
+                with self.assertRaises(RuntimeError):
+                    self.execute_fake(plan, fake)
+                state = json.loads((Path(plan['output']) / 'transaction.json').read_text())
+                self.assertEqual(fake.writes, 0)
+                self.assertFalse(state['write_started'])
+                self.assertFalse(state['readback_verified'])
+                self.assertEqual(state['phase'], 'error')
+
+    def test_readback_corruption_never_succeeds_or_retries(self):
+        for fault in ('recovery-after', 'misc-after', 'boot-after', 'write'):
+            with self.subTest(fault=fault):
+                plan, fake = self.transaction(fault)
+                plan['output'] += '-' + fault
+                with self.assertRaises(RuntimeError) as error:
+                    self.execute_fake(plan, fake)
+                state = json.loads((Path(plan['output']) / 'transaction.json').read_text())
+                self.assertEqual(fake.writes, 1)
+                self.assertTrue(state['write_started'])
+                self.assertEqual(state['write_completed'], fault != 'write')
+                self.assertFalse(state['readback_verified'])
+                self.assertFalse(state['reset_sent'])
+                self.assertEqual(state['phase'], 'error')
+                self.assertNotIn(fake.serial, str(error.exception))
+                self.assertNotIn(fake.serial, json.dumps(state))
+
+    def test_existing_output_refused_before_device_access(self):
+        plan, fake = self.transaction()
+        Path(plan['output']).mkdir()
+        factory = Mock(side_effect=AssertionError('Must not access device'))
+        with self.assertRaises(FileExistsError):
+            writer.execute(plan, self.image, self.padded, self.gpt, client_factory=factory)
+        factory.assert_not_called()
+
+    def test_stage_verification_required_and_write_is_fixed_one_shot(self):
+        client = writer.AdbRecovery('/unused/adb', self.directory, time.monotonic() + 60)
+        client.workspace = '/tmp/axon-OFFLINE'
+        client.stage_path = '/tmp/axon-OFFLINE/candidate-padded.bin'
+        client.shell = Mock()
+        for length in (0, 511, 512, 67109376):
+            with self.subTest(length=length), self.assertRaises(ValueError):
+                client.arm(length)
+        client.verified_stage_length = 512
+        client.arm(512)
+        client.write_recovery()
+        command, label = client.shell.call_args.args
+        self.assertEqual(label, 'WRITE-recovery-only')
+        self.assertEqual(command, 'dd if=/tmp/axon-OFFLINE/candidate-padded.bin of=/dev/block/mmcblk0p19 bs=512 count=1 conv=notrunc\nsync')
+        with self.assertRaises(RuntimeError):
+            client.write_recovery()
+        with self.assertRaises(ValueError):
+            client.arm(512)
+        self.assertEqual(client.shell.call_count, 1)
+
+    def test_failed_device_stage_cannot_be_armed(self):
+        client = writer.AdbRecovery('/unused/adb', self.directory, time.monotonic() + 60)
+        client.workspace = '/tmp/axon-OFFLINE'
+        client._run = Mock(return_value=b'')
+        client.shell = Mock(return_value='512\n' + '0' * 64 + '  /tmp/axon-OFFLINE/candidate-padded.bin')
+        with self.assertRaises(ValueError):
+            client.stage(self.directory / 'unused', '1' * 64, 512)
+        with self.assertRaises(ValueError):
+            client.arm(512)
+
+    def test_timeout_kills_process_without_serial_or_retry(self):
+        client = writer.AdbRecovery('/unused/adb', self.directory, time.monotonic() + 60)
+        client.serial = 'PRIVATE_TIMEOUT_ID'
+        process = Mock()
+        process.__enter__ = Mock(return_value=process)
+        process.__exit__ = Mock(return_value=False)
+        process.communicate.side_effect = [subprocess.TimeoutExpired('secret', 1), (b'', b'')]
+        with patch.object(writer.subprocess, 'Popen', return_value=process) as popen:
+            with self.assertRaises(TimeoutError) as error:
+                client._run(['shell', 'true'], 'test-timeout')
+        process.kill.assert_called_once()
+        popen.assert_called_once()
+        self.assertNotIn(client.serial, str(error.exception))
+        self.assertNotIn(client.serial, (self.directory / 'adb-commands.jsonl').read_text())
+
+
+if __name__ == '__main__':
+    unittest.main(verbosity=2)

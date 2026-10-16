@@ -1,0 +1,104 @@
+#!/usr/bin/env python3
+"""One normal reboot after complete Test07 green readback, then read-only monitoring."""
+import json
+import os
+from pathlib import Path
+import subprocess
+import time
+import uuid
+
+from adb_recovery_control import AdbRecovery, digest, save_state
+from fujisan_image import BootImage, cpio_entries, gzip_member
+
+ROOT = Path(__file__).resolve().parent
+IMAGE_SHA = '9e30e21a7bea1b6cd95d7a3e0da8adacbcdc6507a44d58e87a2fd44cf5e03241'
+FULL_SHA = '68db906dd36a53e013ac76cc1bdcb8b8dc195b3c5521604d755272645d74761a'
+
+
+def main():
+    os.umask(0o077)
+    evidence = ROOT / 'test07-early-green-led-adb-only'
+    transaction = json.loads((evidence / 'transaction.json').read_text())
+    receipt = json.loads((evidence / 'local-readback-verification.json').read_text())
+    if (transaction['phase'] != 'complete'
+            or not all(transaction[k] for k in ('readback_verified', 'misc_unchanged', 'recovery_unchanged'))
+            or transaction['image_sha256'] != IMAGE_SHA
+            or transaction['full_boot_sha256'] != FULL_SHA
+            or receipt != {'full_readback_verified_on_both_macs': True, 'full_boot_sha256': FULL_SHA,
+                           'recovery_unchanged': True, 'misc_unchanged': True}):
+        raise ValueError('Missing complete two-Mac readback verification')
+    image = (ROOT / 'test-07-early-green-led-boot-adb-only.img').read_bytes()
+    readback = (evidence / 'boot-after.bin').read_bytes()
+    if digest(image) != IMAGE_SHA or digest(readback) != FULL_SHA or readback[:len(image)] != image:
+        raise ValueError('Pinned candidate/readback changed')
+    boot = BootImage(image)
+    wanted = {'/' + n.removeprefix('./'): digest(c)
+              for n, f, c, e in cpio_entries(gzip_member(boot.ramdisk)[1])
+              if n.removeprefix('./') in ('prop.default', 'init.recovery.usb.rc')}
+    out = ROOT / 'test07-early-green-led-adb-only-reboot'
+    out.mkdir(mode=0o700, exist_ok=False)
+    state_path = out / 'reboot-result.json'
+    state = {'reboot_attempted': False, 'reboot_command_completed': False,
+             'new_boot_observed': False, 'candidate_userspace_verified': False}
+    save_state(state_path, state)
+    a = AdbRecovery(Path.home() / '.local/share/axon-m-edl/platform-tools-29.0.6/adb',
+                    out, time.monotonic() + 180)
+    try:
+        a.identity()
+        before = a.shell('cat /proc/sys/kernel/random/boot_id', 'boot-id-before')
+        if str(uuid.UUID(before)) != before:
+            raise ValueError('Invalid initial boot ID')
+        if a.shell('cat /sys/class/leds/green/brightness', 'green-before-reboot') != '0':
+            raise ValueError('Green must be off before testing a fresh transition')
+        state['reboot_attempted'] = True
+        save_state(state_path, state)
+        try:
+            a._run(['reboot'], 'REBOOT-normal-once')
+            state['reboot_command_completed'] = True
+        except (RuntimeError, TimeoutError) as exc:
+            state['reboot_command_error'] = str(exc).replace(a.serial, '<bound-device>')
+        save_state(state_path, state)
+        print('One normal reboot attempted. No reset retry; monitoring for 55 seconds.', flush=True)
+        started = time.monotonic()
+        last = None
+        while time.monotonic() - started < 55:
+            result = subprocess.run([a.adb, '-P', '5038', 'devices'], capture_output=True, timeout=10)
+            rows = [line.split() for line in result.stdout.decode(errors='replace').splitlines()[1:]
+                    if len(line.split()) >= 2]
+            states = [r[1] for r in rows]
+            if states != last:
+                print(json.dumps({'elapsed_seconds': round(time.monotonic() - started, 1),
+                                  'adb_states': states}), flush=True)
+                last = states
+            if len(rows) == 1 and rows[0][0] == a.serial and rows[0][1] in ('device', 'recovery'):
+                after = a.shell('cat /proc/sys/kernel/random/boot_id', 'boot-id-poll')
+                if str(uuid.UUID(after)) == after and after != before:
+                    state['new_boot_observed'] = True
+                    values = a.shell('uname -r\ngetprop ro.twrp.version\ngetprop ro.product.device',
+                                     'new-boot-identity').splitlines()
+                    state['identity'] = values
+                    hashes = a.shell('sha256sum /prop.default /init.recovery.usb.rc', 'ramdisk-hashes')
+                    actual = {line.split()[1]: line.split()[0] for line in hashes.splitlines()}
+                    state['ramdisk_matches_candidate'] = actual == wanted
+                    state['candidate_userspace_verified'] = (len(values) == 3
+                        and values[0].startswith('4.4.302') and values[1].startswith('3.7.')
+                        and values[2] == 'fujisan' and actual == wanted)
+                    state['usb'] = a.shell('getprop persist.sys.usb.config\ngetprop sys.usb.config\ngetprop sys.usb.state',
+                                           'usb-state').splitlines()
+                    a.make_workspace()
+                    for name, command in (('dmesg.txt', 'dmesg'), ('recovery.log', 'cat /tmp/recovery.log')):
+                        remote = a.workspace + '/' + name
+                        a.shell(command + ' > ' + remote, 'capture-' + name)
+                        a._run(['pull', remote, str(out / name)], 'pull-' + name)
+                    break
+            time.sleep(2)
+        save_state(state_path, state)
+        print(json.dumps(state), flush=True)
+    except BaseException as exc:
+        state['error'] = (type(exc).__name__ + ': ' + str(exc)).replace(a.serial or '<none>', '<bound-device>')
+        save_state(state_path, state)
+        raise
+
+
+if __name__ == '__main__':
+    main()

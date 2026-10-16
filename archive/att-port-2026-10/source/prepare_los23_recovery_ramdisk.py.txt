@@ -1,0 +1,303 @@
+#!/usr/bin/env python3
+"""Prepare only the pinned LOS recovery diagnostic CPIO. Never access a phone."""
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import struct
+import subprocess
+import sys
+
+sys.dont_write_bytecode = True
+ROOT = Path(__file__).resolve().parent
+sys.path.insert(0, str(ROOT.parent / 'ZTE-Axon-M-Flash-Tool/scripts'))
+from fujisan_image import BootImage, cpio_entries, gzip_member
+
+SOURCE = 'recovery-lineage-23.2-20261006-UNOFFICIAL-fujisan.img'
+SOURCE_SHA = '5d76032e77d24a364bfd733369470abd516c198e8217c590d286dc16ab527a5a'
+TOYBOX_SHA = 'e5b8109aefddf3771a224073272824a9693d96e8fc043eba4db537f61ec52acb'
+SCRIPTS = {
+    'collect': 'e0fea497e8993797848bc38bf70e6f8bd2da8483195a6babc23517dc4726547a',
+    'persist': 'a65ee43cdd3c0620188eac2500c71407e3977938a6ee62845188a44dd39eca04',
+}
+OUTPUT = 'test-19-los-recovery-ramdisk-v2.cpio'
+CHANGED = ('prop.default', 'system/etc/init/hw/init.rc',
+           'init.recovery.qcom.rc', 'system/etc/recovery.fstab', 'system/bin/init')
+ADDED = ('system/bin/axon-diag-collect.sh', 'system/bin/axon-diag-persist.sh')
+
+
+def sha(data):
+    return hashlib.sha256(data).hexdigest()
+
+
+def require(condition, message):
+    if not condition:
+        raise ValueError(message)
+
+
+def replace_once(data, old, new):
+    require(data.count(old) == 1, 'Expected exactly one init anchor')
+    return data.replace(old, new)
+
+
+def encode(name, fields, content, magic=b'070701'):
+    fields = list(fields)
+    fields[6], fields[11] = len(content), len(name.encode()) + 1
+    if magic == b'070702':
+        fields[12] = sum(content) & 0xffffffff
+    header = magic + ''.join(f'{x:08x}' for x in fields).encode() + name.encode() + b'\0'
+    result = header + b'\0' * (-len(header) % 4) + content
+    return result + b'\0' * (-len(result) % 4)
+
+
+def cache_identity():
+    path = ROOT / 'hardware-tests/test16-cache-before/local-verification.json'
+    data = path.read_bytes()
+    receipt = json.loads(data)
+    require(receipt['full_cache_backup_verified_on_both_macs'] is True
+            and receipt['bytes'] == 1718616064
+            and receipt['raw_sha256'] == '2c73c93e82a0d1ed7c1dc8c47595492eb8aac100bb420ffa1d5da64dd5deafd7',
+            'Original full-cache backup receipt differs')
+    uuid = receipt['cache_uuid']
+    require(re.fullmatch(r'[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}', uuid),
+            'Malformed private cache identity')
+    return uuid, sha(data)
+
+
+def native_tool_check(entries):
+    toybox = entries['system/bin/toybox'][2]
+    require(sha(toybox) == TOYBOX_SHA and toybox[:6] == b'\x7fELF\x02\x01'
+            and struct.unpack_from('<H', toybox, 18)[0] == 183,
+            'LOS native toybox identity/ABI differs')
+    # Exact toy_list record corroborated by .gnu_debugdata blkid_main symbol.
+    name, function, options, flags = struct.unpack_from('<QQQQ', toybox, 0x860f8)
+    require((name, function, options, flags) == (0xb845, 0x6372c, 0xf1a5, 0x2002)
+            and toybox[name:name + 6] == b'blkid\0', 'Native blkid applet is not registered')
+    # A symlink is unnecessary: invoke native toybox with explicit applet argv.
+    tools = ('sh', 'timeout', 'setsid', 'sleep', 'kill', 'head', 'tail', 'ln', 'rm',
+             'mkdir', 'readlink', 'cat', 'mount', 'sha256sum', 'sync', 'uname',
+             'getprop', 'dmesg', 'ls', 'ps', 'pidof')
+    require(all('system/bin/' + name in entries for name in tools),
+            'A required native diagnostic tool is missing')
+    return {'toybox_sha256': TOYBOX_SHA, 'blkid_record_offset': '0x860f8',
+            'blkid_main': '0x6372c', 'native_elf_machine': 'AArch64',
+            'donor_binary_or_library_imports': [], 'required_tools': list(tools)}
+
+
+def diagnostic_init_enforcement(binary):
+    """Exact own-init diagnostic patch; source user init ignores permissive cmdline."""
+    require(sha(binary) == '58b17089c9ccd12f43c3b263d12b4204015bd92a14643ece08d51a69cff07d70',
+            'Unexpected published LOS init binary')
+    require(sha(binary[0xfacdc:0xfc724]) == '2df9dd713ded03ee788490b0de356e9f83a4ae4572ce42e393ab9d037d7ff6cd',
+            'Unexpected SetupSelinux instruction context')
+    patched = bytearray(binary)
+    for offset, before, after in ((0xfc078, '1f040071', '1f000071'),
+                                   (0xfc080, '20008052', '00008052')):
+        require(binary[offset:offset + 4] == bytes.fromhex(before), 'Unexpected enforcement instruction')
+        patched[offset:offset + 4] = bytes.fromhex(after)
+    differences = [n for n, (a, b) in enumerate(zip(binary, patched)) if a != b]
+    require(differences == [0xfc079, 0xfc080]
+            and sha(patched) == '714ecace1ad409d588f497d51c738cf0bdb0a1d23ee3029c5b976db5f0e468eb',
+            'Enforcement patch exceeded two reviewed bytes')
+    # getenforce and setenforce calls plus original error handling remain intact.
+    require(patched[0xfc074:0xfc078] == binary[0xfc074:0xfc078]
+            and patched[0xfc07c:0xfc080] == binary[0xfc07c:0xfc080]
+            and patched[0xfc084:0xfc0a0] == binary[0xfc084:0xfc0a0],
+            'Enforcement call/branch/error handling changed')
+    return bytes(patched)
+
+
+def transform_source(data):
+    """Return (uncompressed_cpio, validation); perform only local file reads."""
+    require(sha(data) == SOURCE_SHA, 'Use the exact published LOS recovery image')
+    boot = BootImage(data)
+    _, raw, tail = gzip_member(boot.ramdisk)
+    require(not tail, 'Unexpected ramdisk trailer')
+    old = cpio_entries(raw)
+    require(len(old) == 593 and old[-1][0] == 'TRAILER!!!', 'Unexpected source CPIO layout')
+    entries = {entry[0]: entry for entry in old}
+    require(len(entries) == len(old), 'Duplicate recovery CPIO member')
+    tools = native_tool_check(entries)
+    uuid, receipt_sha = cache_identity()
+    changes = {}
+
+    prop = entries['prop.default'][2]
+    property_counts = {}
+    for key, before, after, count in ((b'ro.debuggable', b'0', b'1', 1),
+                                      (b'ro.secure', b'1', b'0', 1),
+                                      (b'ro.adb.secure', b'1', b'0', 2)):
+        pattern = rb'(?m)^' + re.escape(key) + rb'=' + before + rb'$'
+        prop, found = re.subn(pattern, key + b'=' + after, prop)
+        require(found == count, 'Unexpected security property count')
+        property_counts[key.decode()] = found
+    require(re.findall(rb'(?m)^ro.build.type=(.*)$', prop) == [b'user', b'user'],
+            'Keep user build type; never import userdata adb keys')
+    changes['prop.default'] = prop
+
+    init = entries['system/etc/init/hw/init.rc'][2]
+    init = replace_once(init, b'    chmod 0775 /tmp\n',
+        b'    chmod 0775 /tmp\n\n    # Test19: independent logs before imported display writes.\n'
+        b'    start axon-diag-collect\n    start axon-diag-persist\n')
+    init = replace_once(init, b'service recovery /system/bin/recovery\n',
+        b'service recovery /system/bin/recovery --show_text --reason=axon-diag-test19\n')
+    init = replace_once(init, b'service charger /system/bin/charger\n',
+        b'service charger /system/bin/charger\n    disabled\n')
+    init += b'''\n# Test19 recovery diagnostic: use the normal fs/FunctionFS readiness path.
+on charger
+    trigger late-init
+
+on post-fs
+    setprop sys.usb.config adb
+
+service axon-diag-collect /system/bin/sh /system/bin/axon-diag-collect.sh
+    disabled
+    oneshot
+    user root
+    group root shell log
+    seclabel u:r:recovery:s0
+
+service axon-diag-persist /system/bin/sh /system/bin/axon-diag-persist.sh
+    disabled
+    oneshot
+    user root
+    group root shell log
+    seclabel u:r:recovery:s0
+'''
+    changes['system/etc/init/hw/init.rc'] = init
+
+    qcom = entries['init.recovery.qcom.rc'][2]
+    qcom = replace_once(qcom,
+        b'on early-init\n    wait /sys/class/graphics/fb0/blank\n'
+        b'    wait /sys/module/zte_touch_expand/parameters/separate_inputs\n\n',
+        b'# Test19: start independent RAM logging before display initialization.\n\n')
+    qcom = replace_once(qcom,
+        b'    # User recovery still starts with USB set to none; these values only make\n'
+        b'    # the configfs gadget available when Apply update from ADB selects sideload.\n',
+        b'    # Test19: configure peripheral hardware; post-fs selects adb-only.\n')
+    changes['init.recovery.qcom.rc'] = qcom
+
+    omitted = []
+    fstab = []
+    for line in entries['system/etc/recovery.fstab'][2].splitlines(keepends=True):
+        fields = line.split()
+        if fields and not fields[0].startswith(b'#') and fields[1] in (b'/cache', b'/data', b'/persist', b'/dcmlog'):
+            omitted.append(fields[1].decode())
+            fstab.append(b'# Test19 diagnostic omits automatic ' + fields[1] + b' access.\n')
+        else:
+            fstab.append(line)
+    require(set(omitted) == {'/cache', '/data', '/persist', '/dcmlog'} and len(omitted) == 4,
+            'Unexpected isolated filesystem rows')
+    changes['system/etc/recovery.fstab'] = b''.join(fstab)
+    changes['system/bin/init'] = diagnostic_init_enforcement(entries['system/bin/init'][2])
+
+    additions = {}
+    for kind, expected in SCRIPTS.items():
+        script = (ROOT / f'test19-los-{kind}.sh').read_bytes()
+        require(sha(script) == expected, 'Diagnostic source script changed: ' + kind)
+        if kind == 'persist':
+            require(script.count(b'__AXON_CACHE_UUID__') == 1, 'Expected one UUID placeholder')
+            script = script.replace(b'__AXON_CACHE_UUID__', uuid.encode())
+        require(b'__AXON_' not in script and b'/sbin' not in script, 'Unresolved template or TWRP path')
+        require(subprocess.run(['/bin/sh', '-n'], input=script, capture_output=True).returncode == 0,
+                'Diagnostic script syntax failure')
+        additions['system/bin/axon-diag-' + kind + '.sh'] = script
+    require(all(name not in entries for name in additions), 'Diagnostic script already exists')
+
+    # Direct rc mounts must also be checked; fstab omission alone is insufficient.
+    direct_mounts = []
+    for name, entry in entries.items():
+        if not name.endswith('.rc'):
+            continue
+        content = changes.get(name, entry[2]).decode()
+        for line in content.splitlines():
+            command = line.strip()
+            if command.startswith(('mount ', 'mount_all ', 'exec ', 'exec_start ', 'exec_background ')):
+                direct_mounts.append({'file': name, 'command': command})
+                require(not re.search(r'(^|[ /])(?:data|cache|persist|dcmlog)(?:[ /]|$)', command),
+                        'Explicit init command references isolated filesystem')
+    require(set(changes) == set(CHANGED), 'Unexpected existing-entry changes')
+    packed = bytearray()
+    next_inode = max(entry[1][0] for entry in old) + 1
+    for name, fields, content, original in old:
+        if name == 'TRAILER!!!':
+            for add_name, add_content in additions.items():
+                add_fields = [next_inode, 0o100750, 0, 0, 1, 0, len(add_content), 0, 0, 0, 0, len(add_name) + 1, 0]
+                packed.extend(encode(add_name, add_fields, add_content))
+                next_inode += 1
+        packed.extend(encode(name, fields, changes[name], original[:6]) if name in changes else original)
+    packed.extend(b'\0' * (-len(packed) % 512))
+    new = cpio_entries(bytes(packed))
+    new_entries = {entry[0]: entry for entry in new}
+    require(len(new) == len(old) + 2 and len(new_entries) == len(new), 'CPIO member count changed')
+    require([entry[0] for entry in new if entry[0] not in ADDED] == [entry[0] for entry in old],
+            'Existing member order changed')
+    for old_entry in old:
+        name, fields, content, original = old_entry
+        new_entry = new_entries[name]
+        if name not in changes:
+            require(old_entry == new_entry, 'Unrelated CPIO member changed: ' + name)
+        else:
+            a, z = list(fields), list(new_entry[1])
+            a[6] = z[6]
+            if original[:6] == b'070702':
+                a[12] = z[12]
+            require(a == z and new_entry[2] == changes[name], 'Existing CPIO metadata changed')
+    require(subprocess.run(['/usr/bin/cpio', '-it'], input=bytes(packed), capture_output=True).returncode == 0,
+            'External cpio rejected archive')
+    validation = {
+        'passed': True, 'source_image': SOURCE, 'source_image_sha256': SOURCE_SHA,
+        'source_ramdisk_cpio_sha256': sha(raw), 'cpio_sha256': sha(packed), 'cpio_bytes': len(packed),
+        'source_entries': len(old), 'output_entries': len(new),
+        'changed_existing_entries': list(CHANGED), 'added_entries': list(ADDED),
+        'changed_entry_sha256': {name: sha(new_entries[name][2]) for name in (*CHANGED, *ADDED)},
+        'all_other_encoded_entries_identical': True, 'existing_metadata_preserved_except_content_size_checksum': True,
+        'property_replacement_counts': property_counts, 'build_type_stays_user': True,
+        'adb_only_after_functionfs_setup': True, 'charger_triggers_late_init': True,
+        'charger_service_disabled_for_recovery_diagnostic': True,
+        'collector_precedes_vendor_on_init_display_writes': True,
+        'early_display_waits_removed': True, 'explicit_recovery_menu_arguments': True,
+        'fstab_omitted_mountpoints': omitted, 'direct_init_mount_and_exec_commands': direct_mounts,
+        'native_tools': tools, 'cache_receipt_sha256': receipt_sha,
+        'cache_uuid_pinned_but_not_printed': True, 'cache_node': '/dev/block/mmcblk0p36',
+        'cache_start_sector': 15204376, 'cache_sectors': 3356672,
+        'cache_identity_check': 'timeout-bounded native toybox blkid TYPE=ext4 and exact pinned UUID',
+        'private_mountpoint': '/tmp/axon-cache-test19', 'exclusive_cache_output': '/axon-diag-test19',
+        'logger_bounds_preserved_from_test18': True, 'no_dynamic_donor_binaries_or_libraries': True,
+        'diagnostic_init_enforcement': {
+            'source_sha256': sha(entries['system/bin/init'][2]),
+            'patched_sha256': sha(changes['system/bin/init']),
+            'changed_byte_offsets': ['0xfc079', '0xfc080'],
+            'instructions': ['CMP w0,#1 -> CMP w0,#0', 'MOV w0,#1 -> MOV w0,#0'],
+            'original_get_set_calls_branch_and_error_handling_preserved': True,
+            'desired_selinux_enforcement': 0,
+            'diagnostic_only_not_production_policy': True,
+        },
+        'shell_syntax_and_external_cpio_valid': True, 'complete_boot_image_created': False,
+        'phone_operations': False, 'hardware_tested': False,
+        'runtime_limits': [
+            'Published user init ignored permissive cmdline; the exact own-init two-instruction diagnostic patch now selects permissive. Runtime enforcement and adb UID/auth still require confirmation.',
+            'timeout cannot kill a task blocked in uninterruptible kernel I/O; fixed supervisor never retries.',
+            'Only the next recovery UI/ADB milestone is tested; userdata decryption and full LOS boot are not established.'],
+    }
+    return bytes(packed), validation
+
+
+def main():
+    os.umask(0o077)
+    output = ROOT / 'prepared' / OUTPUT
+    receipt = output.with_suffix('.validation.json')
+    require(not output.exists() and not receipt.exists() and not output.is_symlink() and not receipt.is_symlink(),
+            'Immutable ramdisk output already exists')
+    cpio, validation = transform_source((ROOT / SOURCE).read_bytes())
+    for path, payload in ((output, cpio), (receipt, (json.dumps(validation, indent=2) + '\n').encode())):
+        with path.open('xb') as stream:
+            stream.write(payload)
+            stream.flush()
+            os.fsync(stream.fileno())
+    print(json.dumps({'cpio': str(output), 'cpio_sha256': validation['cpio_sha256'],
+                      'cpio_bytes': len(cpio), 'validation': str(receipt)}, indent=2))
+
+
+if __name__ == '__main__':
+    main()

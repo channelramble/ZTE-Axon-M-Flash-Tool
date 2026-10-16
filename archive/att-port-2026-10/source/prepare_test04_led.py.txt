@@ -1,0 +1,102 @@
+#!/usr/bin/env python3
+"""Add one synchronous blue-LED probe marker to both test03 device trees."""
+import hashlib
+import json
+import os
+from pathlib import Path
+import sys
+
+ROOT = Path(__file__).resolve().parent
+sys.path.insert(0, str(ROOT.parent / 'ZTE-Axon-M-Flash-Tool/scripts'))
+from fujisan_image import BootImage, Fdt, kernel_dtbs, report, sign_image
+
+SOURCE_SHA = '649981ce66684f9c34d45432ac840cf70d9dcfbb8868387bc43bb09f85328574'
+NODE_PATH = ('soc', 'qcom,spmi@400f000', 'qcom,pmi8994@3', 'qcom,leds@d000', 'qcom,rgb_2')
+
+
+def sha(data):
+    return hashlib.sha256(data).hexdigest()
+
+
+def flatten(node, path=''):
+    here = path + '/' + node.name
+    out = {(here, key): value for key, value in node.props.items()}
+    for child in node.children:
+        out.update(flatten(child, here))
+    return out
+
+
+def main():
+    os.umask(0o077)
+    source = ROOT/'prepared/test-03-qsee-probe-boot.img'
+    target = ROOT/'prepared/test-04-blue-led-boot.img'
+    data = source.read_bytes()
+    if sha(data) != SOURCE_SHA:
+        raise ValueError('Source differs from verified test03')
+    boot = BootImage(data)
+    compressed, raw, trees = kernel_dtbs(boot.kernel)
+    if len(trees) != 2:
+        raise ValueError('Expected both published DTBs')
+    blobs = []
+    changes = []
+    for index, (blob, tree) in enumerate(trees):
+        before = flatten(tree.root)
+        node = tree.root
+        for name in NODE_PATH:
+            node = node.child(name)
+            if node is None:
+                raise ValueError('Expected RGB LED node missing')
+        for prop, expected in {
+            'linux,name': b'blue\0', 'qcom,id': (5).to_bytes(4, 'big'),
+            'qcom,mode': b'pwm\0', 'qcom,pwm-us': (1000).to_bytes(4, 'big'),
+            'qcom,max-current': (12).to_bytes(4, 'big'),
+            'qcom,default-state': b'off\0',
+        }.items():
+            if node.props.get(prop) != expected:
+                raise ValueError('Unexpected blue LED property: ' + prop)
+        if 'qcom,turn-off-delay-ms' in node.props or 'linux,default-trigger' in node.props:
+            raise ValueError('Unexpected LED timing or trigger')
+        node.props['qcom,default-state'] = b'on\0'
+        new_blob = tree.serialize(free=8192)
+        after = flatten(Fdt(new_blob).root)
+        changed = [key for key in before.keys() | after.keys()
+                   if before.get(key) != after.get(key)]
+        if changed != [('//' + '/'.join(NODE_PATH), 'qcom,default-state')]:
+            raise ValueError('Unexpected semantic DT changes: ' + str(changed))
+        blobs.append(new_blob)
+        changes.append({'dt_index': index, 'node': '/'+'/'.join(NODE_PATH),
+                        'property': 'qcom,default-state', 'before': 'off', 'after': 'on',
+                        'original_sha256': sha(blob), 'sha256': sha(new_blob)})
+    signed = sign_image(boot.rebuild(kernel=compressed+b''.join(blobs)), '/boot',
+                        str(ROOT/'keys/axon-m-local.key'), str(ROOT/'keys/axon-m-local.pem'))
+    rebuilt = BootImage(signed)
+    final_compressed, final_raw, final_trees = kernel_dtbs(rebuilt.kernel)
+    if final_compressed != compressed or final_raw != raw:
+        raise ValueError('Unexpected kernel code/gzip change')
+    if rebuilt.ramdisk != boot.ramdisk or rebuilt.cmdline != boot.cmdline:
+        raise ValueError('Unexpected ramdisk/command line change')
+    if [blob for blob, _ in final_trees] != blobs:
+        raise ValueError('DT roundtrip mismatch')
+    info = report(signed)
+    if not info['signature_verified'] or not info['boot_id_valid'] or any(x['free_tail_bytes'] != 8192 for x in info['dtbs']):
+        raise ValueError('Final validation failed')
+    v = dict(source_image=source.name, source_sha256=SOURCE_SHA,
+             image=target.name, image_bytes=len(signed), image_sha256=sha(signed),
+             padded_sha256=sha(signed+b'\0'*(-len(signed)%512)),
+             kernel_raw_sha256=sha(raw), kernel_gzip_unchanged=True,
+             ramdisk_unchanged=True, cmdline_unchanged=True,
+             cmdline_bytes=len(boot.cmdline.encode()), dt_changes=changes,
+             signature_verified=True, boot_id_valid=True, hardware_tested=False,
+             interpretation='A newly visible blue component (blue or purple) supports reaching the QPNP RGB probe, level6 initcall 376 (1-based). No color change is inconclusive; probe errors or hardware variation can suppress it.',
+             marker_caveat='Record a new red/off to blue/purple transition after Start; PMIC state can survive a warm reset, and later userspace may overwrite the color.')
+    with target.open('xb') as f:
+        f.write(signed)
+    with target.with_suffix('.validation.json').open('x') as f:
+        json.dump(v, f, indent=2); f.write('\n')
+    with target.with_suffix('.img.json').open('x') as f:
+        json.dump(info, f, indent=2); f.write('\n')
+    print(json.dumps(v, indent=2))
+
+
+if __name__ == '__main__':
+    main()

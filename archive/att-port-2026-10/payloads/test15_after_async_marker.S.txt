@@ -1,0 +1,11 @@
+/* Same inherited wrapper entry; move the marker after original async wait. */
+.text
+.globl pre_async_marker
+pre_async_marker:
+    stp x29, x30, [sp, #-16]!
+    mov x29, sp
+    bl async_synchronize_full
+    mov w0, #255
+    bl green_sync
+    ldp x29, x30, [sp], #16
+    ret

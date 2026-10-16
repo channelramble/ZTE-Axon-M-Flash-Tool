@@ -1,0 +1,199 @@
+#!/usr/bin/env python3
+"""Exact menu-only recovery BCB setup/rollback; files-only unless --execute.
+
+Only misc sector 18626584 can be written. No reset, erase, retry or image write.
+After execution, copy evidence to the other Mac and validate it there with
+--verify-evidence, then return its local-verification.json before reset.
+"""
+from pathlib import Path
+import argparse, hashlib, json, os, signal, sys
+ROOT = Path(__file__).resolve().parent
+SCRIPTS = ROOT.parent / 'ZTE-Axon-M-Flash-Tool/scripts'
+if SCRIPTS.is_dir():
+    sys.path.insert(0, str(SCRIPTS))
+from check_backups import read_gpt
+from firehose_read import Reader
+from run_test22_edl_system import require, load, save, file_sha, checked_file, SystemDeltaWriter
+
+BASE_SHA = '07e3021342d8a12056e9faf36ade8832e1d24e8daaa6930516da3ed88412183e'
+FORCED_SHA = '155bf281f1d80e27de1cd3e801586a4d3927118370931f0bca01fd977905a039'
+SYSTEM_SHA = '508cd08359c6602c36d1bf0a2711dc064bfae509b5773b55933d68ad1f2570a8'
+PINS = {'gpt': '7f1e4fd44e69e004189f0256ce6d35addfb1e3dbfe1cd55bfd2047b580b1e891',
+        'boot': '4434306a5c58d4de5ee018a59a04ae3f551d7073efae1fe7a07bd07e468a17d6',
+        'recovery': 'f5bb5bf5d70ab1e44fd5ac9d888270e219f527d21a67796cf683cef5521ecb35',
+        'misc': BASE_SHA}
+BOUNDS = {'gpt': (0,14), 'boot': (1050624,131072),
+          'recovery': (1181696,131072), 'misc': (18626584,2048)}
+sha = lambda b: hashlib.sha256(b).hexdigest()
+
+
+def forced_misc(data):
+    require(len(data) == 1048576 and sha(data) == BASE_SHA and not any(data[:2048]),
+            'Exact fresh misc with empty BCB required')
+    out = bytearray(data)
+    out[:13] = b'boot-recovery'
+    out[64:85] = b'recovery\n--show_text\n'
+    require(out[512:] == data[512:] and sha(out) == FORCED_SHA,
+            'Forced BCB identity/scope mismatch')
+    return bytes(out)
+
+
+def baseline(before):
+    audit, receipt = load(before/'audit.json'), load(before/'local-verification.json')
+    require(audit['complete'] and receipt['complete'] and receipt['both_macs_verified']
+            and receipt['files'] == audit['files'], 'Before evidence not verified on both Macs')
+    for name,(start,count) in BOUNDS.items():
+        row = audit['files'][name]
+        require(row['file'] == name+'.bin' and row['sha256'] == PINS[name]
+                and row['bytes'] == count*512 and row['start_sector'] == start
+                and row['sectors'] == count and row['final_ack'] is True, 'Bad baseline '+name)
+        checked_file(before/(name+'.bin'), count*512, PINS[name])
+    gpt = read_gpt((before/'gpt.bin').read_bytes())
+    for name in ('boot','recovery','misc'):
+        part = gpt['partitions'][name]
+        require((part['start_sector'],part['sectors']) == BOUNDS[name], 'Wrong geometry '+name)
+    original = (before/'misc.bin').read_bytes()
+    return original, forced_misc(original)
+
+
+def installed_gate(directory):
+    state, receipt = load(directory/'transaction.json'), load(directory/'local-verification.json')
+    require(state['complete'] and state['full_readback_verified'] and state['protected_partitions_verified']
+            and not state.get('error') and not state['reset_sent'] and not state['userdata_written'],
+            'Test22 installation incomplete or reset already sent')
+    require(state['system_after']['sha256'] == SYSTEM_SHA
+            and state['system_after']['bytes'] == 6979321856,
+            'Wrong full system readback')
+    require(receipt['complete'] and receipt['both_macs_verified']
+            and receipt['transaction_sha256'] == file_sha(directory/'transaction.json')
+            and receipt['system_sha256'] == SYSTEM_SHA and receipt['system_bytes'] == 6979321856
+            and receipt['all_13_block_readbacks_verified'] and receipt['protected_sha256'] == PINS,
+            'Test22 two-Mac receipt mismatch')
+    return file_sha(directory/'transaction.json'), file_sha(directory/'local-verification.json')
+
+
+class BcbWriter(Reader):
+    set_write_mode = SystemDeltaWriter.set_write_mode
+
+    def program(self, sector):
+        require(getattr(self,'writes_enabled',False) and sector == self.allowed_sector
+                and len(sector) == 512, 'Only the exact approved misc sector is writable')
+        xml = b'<?xml version="1.0" ?><data><program SECTOR_SIZE_IN_BYTES="512" physical_partition_number="0" start_sector="18626584" num_partition_sectors="1" /></data>'
+        self.log.write(b'TX '+xml+b'\n'); self.log.flush()
+        require(self.ep_out.write(xml,timeout=3000) == len(xml), 'Short XML; no retry')
+        self.response(rawmode=True)
+        require(self.ep_out.write(sector,timeout=10000) == 512, 'Short raw write; no retry/reset')
+        require(self.ep_out.write(b'',timeout=3000) == 0, 'Bad ZLP; no retry/reset')
+        self.response(rawmode=False,timeout=30)
+
+
+def capture(client, directory, misc_hashes):
+    directory.mkdir(mode=0o700,exist_ok=False)
+    rows = {}
+    for name,(start,count) in BOUNDS.items():
+        p = directory/(name+'.bin')
+        row = client.read(start,count,p)
+        allowed = misc_hashes if name == 'misc' else {PINS[name]}
+        require(row['sha256'] in allowed and row['bytes'] == count*512 and row['final_ack'] is True,
+                'Fresh protected partition mismatch '+name)
+        checked_file(p,count*512,row['sha256']); rows[name] = row
+    return rows
+
+
+def verify_evidence(directory, before):
+    original, forced = baseline(before)
+    state = load(directory/'transaction.json')
+    require(state['complete'] and state['full_readback_verified'] and not state.get('error')
+            and not state['reset_sent'] and state['mode'] in ('setup','clear'), 'Incomplete BCB transaction')
+    target = forced if state['mode'] == 'setup' else original
+    require(state['target_misc_sha256'] == sha(target) and state['baseline_misc_sha256'] == BASE_SHA,
+            'Wrong BCB evidence target')
+    for phase in ('before','after'):
+        for name,(start,count) in BOUNDS.items():
+            row = state[phase][name]
+            expected = sha(target) if phase == 'after' and name == 'misc' else PINS[name]
+            if phase == 'before' and name == 'misc' and state['mode'] == 'clear':
+                require(row['sha256'] in {BASE_SHA,FORCED_SHA}, 'Unexpected clear input')
+                expected = row['sha256']
+            require(row['sha256'] == expected and row['bytes'] == count*512
+                    and row['start_sector'] == start and row['sectors'] == count
+                    and row['final_ack'] is True, 'Evidence row mismatch')
+            checked_file(directory/phase/(name+'.bin'),count*512,expected)
+    require((directory/'after/misc.bin').read_bytes() == target, 'Full misc bytes differ')
+    receipt = {'complete':True,'both_macs_verified':True,'mode':state['mode'],
+               'transaction_sha256':file_sha(directory/'transaction.json'),
+               'baseline_misc_sha256':BASE_SHA,'misc_sha256':sha(target),
+               'protected_sha256':{k:v for k,v in PINS.items() if k!='misc'},
+               'full_misc_readback_verified':True,'reset_sent':False}
+    path = directory/'local-verification.json'
+    require(not path.exists() and not path.is_symlink(), 'Receipt already exists')
+    save(path,receipt)
+    return receipt
+
+
+def execute(mode,before,installed):
+    original, forced = baseline(before)
+    installation = installed_gate(installed) if mode == 'setup' else None
+    review = load(ROOT/'test22-recovery-bcb-independent-review.json')
+    require(review['passed'] and review['runner_sha256'] == file_sha(Path(__file__)),
+            'Missing exact independent runner review')
+    out = ROOT/('test22-recovery-bcb-'+mode)
+    out.mkdir(mode=0o700,exist_ok=False)
+    target = forced if mode == 'setup' else original
+    state = {'mode':mode,'baseline_misc_sha256':BASE_SHA,'target_misc_sha256':sha(target),
+             'installation_receipt_pins':installation,'write_started':False,'program_ack':False,
+             'full_readback_verified':False,'complete':False,'reset_sent':False,'automatic_retry':False}
+    save(out/'transaction.json',state)
+    def deadline(*unused):
+        raise TimeoutError('BCB transaction timeout; keep EDL, no retry/reset')
+    signal.signal(signal.SIGALRM,deadline); signal.alarm(180)
+    try:
+        with (out/'firehose.xml.log').open('xb') as log:
+            c = BcbWriter(log)
+            try:
+                c.configure()
+                state['before'] = capture(c,out/'before',{BASE_SHA} if mode=='setup' else {BASE_SHA,FORCED_SHA})
+                live = (out/'before/misc.bin').read_bytes()
+                require(live in (original,forced), 'Current misc differs from exact known states')
+                if live != target:
+                    c.allowed_sector = target[:512]
+                    state['write_started'] = True; save(out/'transaction.json',state)
+                    c.set_write_mode(True); c.program(target[:512]); c.set_write_mode(False)
+                    state['program_ack'] = True; save(out/'transaction.json',state)
+                else:
+                    state['already_clear_no_write'] = True
+                state['after'] = capture(c,out/'after',{sha(target)})
+                require((out/'after/misc.bin').read_bytes() == target, 'Full misc readback differs')
+                state.update(full_readback_verified=True,complete=True)
+                save(out/'transaction.json',state)
+            finally:
+                c.close()
+    except BaseException as exc:
+        state['error'] = type(exc).__name__+': '+str(exc); save(out/'transaction.json',state); raise
+    finally:
+        signal.alarm(0)
+    print(json.dumps({'complete':True,'mode':mode,'misc_sha256':sha(target),'reset_sent':False}))
+
+
+def main():
+    os.umask(0o077)
+    p=argparse.ArgumentParser(description=__doc__)
+    p.add_argument('--mode',choices=('setup','clear'),default='setup')
+    p.add_argument('--before',type=Path,default=ROOT/'test22-edl-before')
+    p.add_argument('--installed',type=Path,default=ROOT/'test22-edl-system-write')
+    p.add_argument('--execute',action='store_true')
+    p.add_argument('--verify-evidence',type=Path)
+    a=p.parse_args(); require(not (a.execute and a.verify_evidence), 'Choose execution or evidence validation')
+    if a.verify_evidence:
+        print(json.dumps(verify_evidence(a.verify_evidence,a.before))); return
+    original,forced=baseline(a.before)
+    if a.execute:
+        execute(a.mode,a.before,a.installed)
+    else:
+        print(json.dumps({'files_only_validated':True,'baseline_misc_sha256':sha(original),
+                          'forced_misc_sha256':sha(forced),'mode':a.mode,'changed_bytes':34,
+                          'setup_requires_completed_Test22_two_Mac_receipt_before_execute':True}))
+
+
+if __name__=='__main__':
+    main()

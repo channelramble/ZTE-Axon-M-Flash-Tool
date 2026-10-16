@@ -1,0 +1,51 @@
+{
+  "files": [
+    {
+      "path": "/system/etc/axon-diag-test20-collect.sh",
+      "source_exists": false,
+      "payload": "/EXAMPLE/WORKSPACE/.axon-m-private/test20-logging-payloads/axon-diag-test20-collect.sh",
+      "sha256": "00f32d09dd3e2a9629c68fd22e3c1db145ee828a1771135e4a27cc3ff6d41560",
+      "bytes": 6985,
+      "uid": 0,
+      "gid": 0,
+      "mode": 33188,
+      "selinux": "u:object_r:system_file:s0"
+    },
+    {
+      "path": "/system/etc/axon-diag-test20-persist.sh",
+      "source_exists": false,
+      "payload": "/EXAMPLE/WORKSPACE/.axon-m-private/test20-logging-payloads/axon-diag-test20-persist.sh",
+      "sha256": "b64797ddae3688a1a6fc25a26996b1593ba184128f8e5fae903dd6acd76b262e",
+      "bytes": 3445,
+      "uid": 0,
+      "gid": 0,
+      "mode": 33188,
+      "selinux": "u:object_r:system_file:s0"
+    },
+    {
+      "path": "/system/etc/init/axon-diag-test20.rc",
+      "source_exists": false,
+      "payload": "/EXAMPLE/WORKSPACE/.axon-m-private/test20-logging-payloads/axon-diag-test20.rc",
+      "sha256": "dc39d3f3df26d3245f526a173bd7d1721fe2b5cb177ced8788c2b8164e634b75",
+      "bytes": 438,
+      "uid": 0,
+      "gid": 0,
+      "mode": 33188,
+      "selinux": "u:object_r:system_file:s0"
+    }
+  ],
+  "cache_backup_receipt_sha256": "48119695ea1cbe8b24c35e8f7b0f0d4838219e208921d8f390b47e6a589ba563",
+  "phone_operations": false,
+  "logger_mounts_or_formats": false,
+  "snapshot_seconds": [
+    0,
+    15,
+    45,
+    120
+  ],
+  "jobs_maximum": 28,
+  "job_timeout_seconds": 4,
+  "collector_nominal_seconds": 126,
+  "persister_worker_timeout_seconds": 145,
+  "persister_supervisor_seconds": 150
+}

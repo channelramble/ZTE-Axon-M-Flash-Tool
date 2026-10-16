@@ -1,0 +1,83 @@
+#!/usr/bin/env python3
+"""Focused offline identity, change-scope, and no-clobber checks."""
+import importlib.util
+import json
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+import unittest
+
+BASE = Path(__file__).resolve().parent
+spec = importlib.util.spec_from_file_location('security', BASE / 'prepare_los23_full_security.py')
+security = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(security)
+
+
+class SecurityPayloads(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.original = {p: (security.SOURCE / s['source']).read_bytes()
+                        for p, s in security.SPECS.items()}
+
+    def test_exact_source_changes_only_approved_bytes(self):
+        patched, report = security.transform_files(self.original)
+        counts = {e['filesystem_path']: len(e['changed_byte_offsets']) for e in report['entries']}
+        self.assertEqual(counts, {'/system/bin/init': 2, '/system/build.prop': 3,
+                                  '/system_ext/etc/build.prop': 1})
+        init = patched['/system/bin/init']
+        self.assertEqual(init[0x113638:0x11363c].hex(), '1f000071')
+        self.assertEqual(init[0x113640:0x113644].hex(), '00008052')
+        for offset in [0x113634, 0x11363c, 0x113644, 0x113648]:
+            self.assertEqual(init[offset:offset + 4], self.original['/system/bin/init'][offset:offset + 4])
+        self.assertIn(b'ro.build.type=user\n', patched['/system/build.prop'])
+
+    def test_wrong_and_already_patched_init_rejected(self):
+        for data in [self.original['/system/bin/init'][:-1],
+                     b'X' + self.original['/system/bin/init'][1:],
+                     security.patch_init(self.original['/system/bin/init'])]:
+            with self.assertRaises(ValueError):
+                security.patch_init(data)
+
+    def test_wrong_property_inputs_rejected(self):
+        path = '/system/build.prop'
+        for content in [self.original[path] + b'ro.secure=1\n',
+                        self.original[path].replace(b'ro.secure=1\n', b'ro.secure=0\n')]:
+            bad = dict(self.original, **{path: content})
+            with self.assertRaises(ValueError):
+                security.transform_files(bad)
+
+    def test_nonexact_file_set_rejected(self):
+        bad = dict(self.original)
+        bad.pop('/system_ext/etc/build.prop')
+        with self.assertRaises(ValueError):
+            security.transform_files(bad)
+        bad = dict(self.original, **{'/extra': b''})
+        with self.assertRaises(ValueError):
+            security.transform_files(bad)
+
+    def test_conflicting_property_definitions_rejected(self):
+        for data in [b'ro.secure=1\nro.secure=0\n', b'ro.secure=0\n', b'ro.secure=1\r\n']:
+            with self.assertRaises(ValueError):
+                security.patch_properties(data, [(b'ro.secure', b'1', b'0')])
+
+    def test_cli_no_clobber_and_readback_manifest(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            dest = Path(tmp) / 'candidate'
+            command = [sys.executable, str(BASE / 'prepare_los23_full_security.py'),
+                       '--output-dir', str(dest)]
+            first = subprocess.run(command, capture_output=True)
+            self.assertEqual(first.returncode, 0, first.stderr.decode())
+            manifest = json.loads((dest / 'manifest.json').read_text())
+            before = {p.name: p.read_bytes() for p in dest.iterdir()}
+            for item in manifest['entries']:
+                data = Path(item['output_path']).read_bytes()
+                self.assertEqual(security.sha(data), item['output_sha256'])
+                self.assertEqual(len(data), item['original_bytes'])
+            again = subprocess.run(command, capture_output=True)
+            self.assertNotEqual(again.returncode, 0)
+            self.assertEqual(before, {p.name: p.read_bytes() for p in dest.iterdir()})
+
+
+if __name__ == '__main__':
+    unittest.main(verbosity=2)

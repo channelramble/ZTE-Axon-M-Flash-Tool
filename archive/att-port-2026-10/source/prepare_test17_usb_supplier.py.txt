@@ -1,0 +1,111 @@
+#!/usr/bin/env python3
+"""Local-only targeted USB supplier diagnostic, based on exact Test16."""
+from pathlib import Path
+import gzip, hashlib, json, os, re, subprocess, sys, uuid
+ROOT = Path(__file__).resolve().parent
+sys.path.insert(0, str(ROOT.parent/'ZTE-Axon-M-Flash-Tool/scripts'))
+from fujisan_image import BootImage, Fdt, cpio_entries, kernel_dtbs, report, sign_image
+from prepare_test16_runtime_logs import encode
+SHA = lambda b: hashlib.sha256(b).hexdigest()
+SOURCE_SHA = '195e811d725dc034826f6bcd6e42448e99d82b25afb1acb4f2100fa849b31859'
+RAW_SHA = 'a88e1d1795a85f6ee9b0ca743ed7f45de36070d8f3bf1238547bb52a48f2447c'
+CACHE_SHA = '4fc33cbd0de698b47c930eb84a83c4d7b91645dec0f4ca19b961f88881f965f7'
+
+def flatten(node, path=''):
+    here = path + '/' + node.name if node.name else ''
+    out = {here or '/': dict(node.props)}
+    for child in node.children:
+        out.update(flatten(child, here))
+    return out
+
+def main():
+    os.umask(0o077)
+    src = ROOT/'prepared/test-16-runtime-logs-boot-adb-only.img'
+    dst = ROOT/'prepared/test-17-usb-supplier-boot-adb-only.img'
+    outputs = [dst, dst.with_suffix('.validation.json'), dst.with_suffix('.img.json')]
+    assert not any(p.exists() or p.is_symlink() for p in outputs)
+    data = src.read_bytes(); assert SHA(data) == SOURCE_SHA
+    pin = json.loads((ROOT/'hardware-tests/test16-cache-after/local-verification.json').read_text())
+    assert pin['full_cache_backup_verified_on_both_macs'] and pin['bytes'] == 1718616064
+    assert pin['raw_sha256'] == CACHE_SHA
+    oldpin = json.loads((ROOT/'hardware-tests/test16-cache-before/local-verification.json').read_text())
+    assert pin['cache_uuid'] == oldpin['cache_uuid']
+    cache_uuid = str(uuid.UUID(pin['cache_uuid']))
+    extracted = json.loads((ROOT/'hardware-tests/test16-cache-extracted-after/extraction.json').read_text())
+    assert extracted['debugfs_read_only'] and not extracted['manifest_errors']
+    assert len(extracted['diagnostic_hash_checks']) == 19 and all(extracted['diagnostic_hash_checks'].values())
+    boot = BootImage(data); compressed, raw, dtbs = kernel_dtbs(boot.kernel)
+    assert SHA(raw) == RAW_SHA and len(dtbs) == 2
+    newdt, changes = [], []
+    for i, (blob, tree) in enumerate(dtbs):
+        before = flatten(tree.root)
+        node = tree.root.child('soc').child('ssusb@6a00000')
+        old = node.props['extcon']; assert len(old) == 4 and any(old)
+        providers = [(p, props) for p, props in before.items()
+                     if props.get('phandle', props.get('linux,phandle')) == old]
+        assert len(providers) == 1 and 'pericom' in providers[0][0]
+        assert b'pericom' in providers[0][1].get('compatible', b'')
+        # A present NULL phandle returns accepted -ENODEV. Deleting the property
+        # would instead permit the shipped driver's implicit host-only fallback.
+        node.props['extcon'] = b'\0'*4
+        newblob = tree.serialize(free=8192); checked = Fdt(newblob)
+        after = flatten(checked.root)
+        assert before.keys() == after.keys()
+        delta = []
+        for path in before:
+            assert before[path].keys() == after[path].keys()
+            for prop in before[path]:
+                if before[path][prop] != after[path][prop]: delta.append((path, prop))
+        assert delta == [('/soc/ssusb@6a00000', 'extcon')]
+        assert checked.reserve == tree.reserve and checked.bootcpu == tree.bootcpu and checked.last == tree.last
+        assert checked.free_tail == 8192
+        newdt.append(newblob)
+        changes.append({'dt_index': i, 'path': delta[0][0], 'property': 'extcon',
+                        'old_hex': old.hex(), 'new_hex': '00000000', 'provider': providers[0][0],
+                        'source_dtb_sha256': SHA(blob), 'new_dtb_sha256': SHA(newblob)})
+    entries = cpio_entries(gzip.decompress(boot.ramdisk))
+    original = {n: (f,c) for n,f,c,e in entries}
+    collect = (ROOT/'test17-usb-collect.sh').read_bytes()
+    persist = (ROOT/'test17-usb-persist.sh').read_bytes()
+    assert persist.count(b'__AXON_CACHE_UUID__') == 1
+    persist = persist.replace(b'__AXON_CACHE_UUID__', cache_uuid.encode())
+    assert persist == original['sbin/axon-diag-persist.sh'][1].replace(b'Test16',b'Test17').replace(b'test16',b'test17')
+    init = original['init.rc'][1].replace(b'Test16', b'Test17')
+    assert b'on post-fs\n    start axon_diag_collect\n    start axon_diag_persist\n' in init
+    updates = {'init.rc':init, 'sbin/axon-diag-collect.sh':collect, 'sbin/axon-diag-persist.sh':persist}
+    for script in (collect,persist):
+        subprocess.run(['/bin/sh','-n'], input=script, check=True)
+    packed = bytearray()
+    for n,f,c,e in entries: packed.extend(encode(n,f,updates[n]) if n in updates else e)
+    packed.extend(b'\0'*(-len(packed)%512))
+    newentries = cpio_entries(bytes(packed))
+    assert [n for n,*_ in entries] == [n for n,*_ in newentries]
+    for old, new in zip(entries,newentries):
+        if old[0] not in updates: assert old == new
+        else:
+            assert new[2] == updates[old[0]]
+            fields=list(old[1]); fields[6]=len(new[2]); assert fields==new[1]
+    subprocess.run(['/usr/bin/cpio','-it'], input=bytes(packed), capture_output=True, check=True)
+    newkernel = compressed + b''.join(newdt)
+    ramdisk = gzip.compress(bytes(packed),compresslevel=9,mtime=0)
+    signed = sign_image(boot.rebuild(kernel=newkernel,ramdisk=ramdisk),'/boot',
+                        str(ROOT/'keys/axon-m-local.key'),str(ROOT/'keys/axon-m-local.pem'))
+    checked = BootImage(signed)
+    assert checked.kernel == newkernel and checked.ramdisk == ramdisk and checked.cmdline == boot.cmdline
+    assert checked.second == boot.second and boot.rebuild(kernel=checked.kernel,ramdisk=checked.ramdisk) == checked.payload
+    assert kernel_dtbs(checked.kernel)[0:2] == (compressed,raw)
+    info=report(signed); assert info['signature_verified'] and info['boot_id_valid'] and info['signature_target']=='/boot'
+    validation={'source_sha256':SOURCE_SHA,'image_sha256':SHA(signed),'image_bytes':len(signed),
+                'padded_sha256':SHA(signed+b'\0'*(-len(signed)%512)),'raw_sha256':RAW_SHA,
+                'compressed_kernel_byte_exact_to_test16':True,'dt_changes':changes,
+                'ramdisk_changed_files':list(updates),'other_ramdisk_entries_byte_exact':True,
+                'usb_rc_charger_cmdline_unchanged':True,'diagnostic_start_remains_post_fs':True,
+                'collector_prioritizes_init_recovery_adbd':True,'collector_max_threads':96,
+                'diagnostic_output_directory':'/axon-diag-test17',
+                'verified_cache_backup_sha256':CACHE_SHA,'signature_verified':True,'boot_id_valid':True,
+                'hardware_tested':False,'interpretation':'Manual peripheral USB diagnostic; not a production TI extcon driver fix. Keep kernel bypasses unchanged for this controlled test.'}
+    for path, content in zip(outputs,[signed,(json.dumps(validation,indent=2)+'\n').encode(),(json.dumps(info,indent=2)+'\n').encode()]):
+        with path.open('xb') as f:f.write(content)
+    print(json.dumps(validation,indent=2))
+
+if __name__ == '__main__':main()

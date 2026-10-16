@@ -1,0 +1,68 @@
+#!/usr/bin/env python3
+"""Fresh read-only pre-install snapshot, run on MacBook. Never writes phone."""
+from pathlib import Path
+import datetime,hashlib,json,os,re,subprocess
+ROOT=Path(__file__).resolve().parent
+ADB=str(Path.home()/'.local/share/axon-m-edl/platform-tools-29.0.6/adb')
+SPECS={'boot':(18,1050624,131072,'179:18'),
+       'recovery':(19,1181696,131072,'179:19'),
+       'system':(20,1312768,13631488,'179:20'),
+       'persist':(37,18561048,65536,'259:5'),
+       'misc':(38,18626584,2048,'259:6'),
+       'dcmlog':(47,18878464,204800,'259:15'),
+       'userdata':(48,19083264,103059423,'259:16')}
+BEFORE={'boot':'da1ca2689b3bbb16d9783c48b1ab26809184a31f8efa650dac1cadd029f1399d',
+        'recovery':'29b5052e639b46c2ea08c2cbdae59ecbb2e4a38b97f7b4e703019db83434cff8',
+        'system':'13c66498cc6c8f5c4a32e9d813f5515d87f92e618d7619fa06f40658ee1bda9f',
+        'persist':'dc8f6867d1bc05d0f2b3db355ae9de0d6fe6939b1877a4f19c6f6ce0572fedf1',
+        'dcmlog':'91954899b2f7818b05fb6e0a4944c0cca9b1470fb3554b8507ee61be087989ef'}
+GPT_SHA='7f1e4fd44e69e004189f0256ce6d35addfb1e3dbfe1cd55bfd2047b580b1e891'
+os.umask(0o077)
+rows=[l.split() for l in subprocess.check_output([ADB,'-P','5038','devices'],timeout=10).decode().splitlines()[1:] if len(l.split())>=2]
+assert len(rows)==1 and rows[0][1]=='recovery'
+base=[ADB,'-P','5038','-s',rows[0][0],'exec-out']
+def cmd(s,timeout=15):return subprocess.check_output(base+['sh','-c',s],timeout=timeout).decode().strip()
+assert cmd('id -u')=='0'
+assert cmd('uname -r')=='4.4.302-cip112-fujisan'
+assert cmd('getprop ro.lineage.version')=='23.2-20261006-UNOFFICIAL-fujisan'
+mounts=cmd('cat /proc/mounts').splitlines()
+for name,(index,start,sectors,dev) in SPECS.items():
+ node=f'mmcblk0p{index}'
+ assert cmd(f'cat /sys/class/block/{node}/start')==str(start)
+ assert cmd(f'cat /sys/class/block/{node}/size')==str(sectors)
+ assert cmd(f'cat /sys/class/block/{node}/dev')==dev
+ assert all(f'/dev/block/{node}'!=cmd('readlink -f '+line.split()[0]) for line in mounts if line.split()[0].startswith('/dev/block/'))
+out=ROOT/'test20-before-adb';out.mkdir(mode=0o700,exist_ok=False)
+state={'complete':False,'phone_writes':False,'resets':False,'geometry':SPECS,'files':{},'partition_hashes':{},'started_at':datetime.datetime.now(datetime.timezone.utc).isoformat()}
+def save():
+ p=out/'audit.json.tmp';p.write_text(json.dumps(state,indent=2)+'\n');p.replace(out/'audit.json')
+save()
+for name,size,command in [('boot.bin',67108864,['cat','/dev/block/mmcblk0p18']),
+ ('recovery.bin',67108864,['cat','/dev/block/mmcblk0p19']),
+ ('misc.bin',1048576,['cat','/dev/block/mmcblk0p38']),
+ ('gpt-main.bin',7168,['head','-c','7168','/dev/block/mmcblk0'])]:
+ h=hashlib.sha256();count=0
+ with (out/name).open('xb') as f,(out/(name+'.stderr')).open('xb') as err:
+  p=subprocess.Popen(base+command,stdout=subprocess.PIPE,stderr=err)
+  try:
+   for b in iter(lambda:p.stdout.read(1048576),b''):
+    count+=len(b);assert count<=size;h.update(b);f.write(b)
+   assert p.wait(timeout=15)==0 and count==size
+   f.flush();os.fsync(f.fileno())
+  finally:
+   if p.poll() is None:p.kill();p.wait()
+ digest=h.hexdigest()
+ if name=='gpt-main.bin':assert digest==GPT_SHA
+ elif name[:-4] in BEFORE:assert digest==BEFORE[name[:-4]]
+ state['files'][name]={'bytes':count,'sha256':digest};save()
+for name,digest in BEFORE.items():
+ index=SPECS[name][0]
+ actual=cmd(f'sha256sum /dev/block/mmcblk0p{index}',timeout=240).split()[0]
+ assert re.fullmatch('[0-9a-f]{64}',actual) and actual==digest
+ state['partition_hashes'][name]=actual;save()
+ print(json.dumps({'partition':name,'fresh_hash_matches_backup':True}),flush=True)
+misc=(out/'misc.bin').read_bytes()
+state['misc_all_zero']=not any(misc)
+state['misc_nonzero_bytes']=sum(x!=0 for x in misc)
+state['complete']=True;state['finished_at']=datetime.datetime.now(datetime.timezone.utc).isoformat();save()
+print(json.dumps({'complete':True,'misc_all_zero':state['misc_all_zero'],'misc_nonzero_bytes':state['misc_nonzero_bytes'],'phone_writes':False}),flush=True)

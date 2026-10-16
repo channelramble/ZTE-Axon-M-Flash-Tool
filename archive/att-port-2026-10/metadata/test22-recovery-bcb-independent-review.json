@@ -1,0 +1,37 @@
+{
+  "passed": true,
+  "runner_sha256": "edc84224381e91ccfe3d8e3bca1e02b96cac73138268d4d1974fa6dbdee787ee",
+  "reset_sha256": "07beb2d7a6465b9709053ac678a56e0493c07204e6b0d4c0e1270a14f8a66f4e",
+  "checks": [
+    "Exact current baseline pinned with empty first 2KiB",
+    "Full forced misc SHA and length pinned",
+    "Command is only boot-recovery with zero termination",
+    "Only menu show_text recovery argument",
+    "Exact 34 bytes changed all within first sector",
+    "Unrelated higher misc nonzero bytes preserved",
+    "Program XML fixed to exactly one approved misc sector",
+    "Only exact 512-byte payload and ZLP emitted",
+    "Initial raw and final normal ACK gates",
+    "Rejected wrong bytes before any program transmission",
+    "Rejected wrong length before any program transmission",
+    "Rejected writes disabled before any program transmission",
+    "Reviewed frozen runner hash",
+    "Reviewed frozen reset hash"
+  ],
+  "source_review": [
+    "Files-only defaults; execute-only device path; setup has no reset or erase.",
+    "Setup requires complete Test22 full system and protected-partition two-Mac receipts pinned to exact local transaction.",
+    "Before each possible write, full fresh GPT/boot/recovery/misc copies are hashed against exact known geometry and states.",
+    "Only fixed first misc sector writable; exact full misc after readback and GPT/boot/recovery preservation required.",
+    "Clear accepts only exact original or forced full misc states and restores original sector, preserving all higher bytes.",
+    "Unique transaction directories, durable state before write, no automatic retries; write failures retain EDL without reset.",
+    "Separate reset requires exact independent review, completed setup and both-Mac full readback receipt tied to transaction hash.",
+    "Reset additionally reads and checks fresh GPT and forced misc immediately before one reset transmission; unique reset directory prevents replay.",
+    "Root remains sole device operator; no phone operation in this independent review."
+  ],
+  "limitations": [
+    "No hardware execution in this review; actual recovery entry and BCB clearing require the separately gated trial.",
+    "Unknown changed misc states fail closed and require fresh analysis instead of automatic clearing."
+  ],
+  "phone_operations": false
+}

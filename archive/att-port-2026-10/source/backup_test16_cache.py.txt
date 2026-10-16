@@ -1,0 +1,53 @@
+#!/usr/bin/env python3
+"""Read-only backup of the fixed cache partition before diagnostic file creation."""
+from pathlib import Path
+import contextlib,gzip,hashlib,json,os,shutil,signal,struct
+from firehose_read import Reader
+from firehose_boot_test import save_state
+ROOT=Path(__file__).resolve().parent
+START=15204376
+COUNT=3356672
+SIZE=COUNT*512
+GPT_SHA='7f1e4fd44e69e004189f0256ce6d35addfb1e3dbfe1cd55bfd2047b580b1e891'
+SHA=lambda b:hashlib.sha256(b).hexdigest()
+os.umask(0o077)
+assert shutil.disk_usage(ROOT).free>SIZE+2*1024**3,'Insufficient backup space'
+out=ROOT/'test16-cache-before';out.mkdir(mode=0o700,exist_ok=False)
+state={'complete':False,'writes_sent':False,'reset_sent':False,'start_sector':START,'sectors':COUNT,'bytes':SIZE}
+def save():save_state(out/'backup.json',state)
+def deadline(*unused):raise TimeoutError('Cache read deadline; no writes or reset')
+signal.signal(signal.SIGALRM,deadline);signal.alarm(300);save()
+print(json.dumps({'cache_backup_started':True,'bytes':SIZE,'read_only':True}),flush=True)
+with (out/'firehose.xml.log').open('xb') as log,(out/'read-progress.log').open('x') as progress:
+ c=Reader(log)
+ try:
+  with contextlib.redirect_stdout(progress):
+   c.configure();c.read(0,14,out/'gpt.bin')
+   assert SHA((out/'gpt.bin').read_bytes())==GPT_SHA
+   c.read(START,8,out/'cache-header.bin')
+   head=(out/'cache-header.bin').read_bytes();assert head[1080:1082]==b'\x53\xef','Expected ext-family signature'
+   log_block_size=struct.unpack_from('<I',head,1048)[0];assert log_block_size<=2
+   block_size=1024<<log_block_size;blocks=struct.unpack_from('<I',head,1028)[0]
+   if struct.unpack_from('<I',head,1120)[0]&0x80:
+    blocks|=struct.unpack_from('<I',head,1360)[0]<<32
+   assert block_size in (1024,2048,4096) and 0<blocks*block_size<=SIZE
+   c.read(START,COUNT,out/'cache.bin')
+  p=out/'cache.bin';assert p.stat().st_size==SIZE
+  with p.open('rb') as f:assert f.read(4096)==head
+  digest=hashlib.sha256()
+  with p.open('rb') as f:
+   for b in iter(lambda:f.read(1024*1024),b''):digest.update(b)
+  state.update(raw_sha256=digest.hexdigest(),ext_block_size=block_size,filesystem_bytes=blocks*block_size,ext_family_magic_valid=True)
+  save()
+ except BaseException as exc:
+  state['error']=type(exc).__name__+': '+str(exc);save();raise
+ finally:c.close()
+signal.alarm(0)
+with (out/'cache.bin').open('rb') as src,(out/'cache.bin.gz').open('xb') as dest:
+ with gzip.GzipFile(fileobj=dest,mode='wb',compresslevel=1,mtime=0) as z:shutil.copyfileobj(src,z,1024*1024)
+digest=hashlib.sha256();count=0
+with gzip.open(out/'cache.bin.gz','rb') as z:
+ for b in iter(lambda:z.read(1024*1024),b''):digest.update(b);count+=len(b)
+assert count==SIZE and digest.hexdigest()==state['raw_sha256']
+state.update(complete=True,compressed_bytes=(out/'cache.bin.gz').stat().st_size);save()
+print(json.dumps(state),flush=True)

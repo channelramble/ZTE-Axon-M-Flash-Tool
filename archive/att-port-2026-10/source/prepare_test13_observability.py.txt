@@ -1,0 +1,126 @@
+#!/usr/bin/env python3
+"""Local-only temporary boot observability: keep deferred work, bypass its waits."""
+import gzip,hashlib,json,os,struct,subprocess,sys,tempfile
+from pathlib import Path
+ROOT=Path(__file__).resolve().parent
+sys.path.insert(0,str(ROOT.parent/'ZTE-Axon-M-Flash-Tool/scripts'))
+from fujisan_image import BootImage,gzip_member,report,sign_image
+from prepare_test12_preflush import bl as branch
+SHA=lambda b:hashlib.sha256(b).hexdigest()
+BASE=0xffffff8008080000
+CAVE=0xffffff80097867b8
+STUB=0xffffff8009786674
+EXTERNAL={'green_sync':0xffffff80097866d8,'flush_workqueue':0xffffff80080c3c1c}
+
+def link_object(data):
+    if data[:7]!=b'\x7fELF\x02\x01\x01' or struct.unpack_from('<HH',data,16)!=(1,183):
+        raise ValueError('Expected little-endian arm64 relocatable ELF')
+    shoff=struct.unpack_from('<Q',data,40)[0]
+    entsize,count,strindex=struct.unpack_from('<HHH',data,58)
+    assert entsize==64
+    sections=[struct.unpack_from('<IIQQQQIIQQ',data,shoff+i*64) for i in range(count)]
+    content=lambda s:data[s[4]:s[4]+s[5]]
+    strings=content(sections[strindex])
+    cstr=lambda table,pos:table[pos:table.index(b'\0',pos)].decode()
+    named={cstr(strings,s[0]):(i,s) for i,s in enumerate(sections)}
+    textindex,textsection=named['.text'];code=bytearray(content(textsection))
+    syms=content(named['.symtab'][1]);names=content(sections[named['.symtab'][1][6]])
+    symbols=[]
+    for off in range(0,len(syms),24):
+        name,info,other,shndx,value,size=struct.unpack_from('<IBBHQQ',syms,off)
+        symbols.append((cstr(names,name),shndx,value))
+    addresses={name:CAVE+value for name,idx,value in symbols if idx==textindex and not name.startswith('$')}
+    assert addresses['conditional_flush']==CAVE
+    assert set(addresses)=={'conditional_flush'}
+    calls=[]
+    for name,(i,s) in named.items():
+        if s[1] not in (4,9):continue
+        assert name=='.rela.text' and s[1]==4 and s[7]==textindex and s[9]==24
+        rel=content(s)
+        for off in range(0,len(rel),24):
+            offset,info,addend=struct.unpack_from('<QQq',rel,off)
+            assert info&0xffffffff==283 and addend==0
+            symbol,idx,value=symbols[info>>32]
+            target=addresses[symbol] if idx==textindex else EXTERNAL[symbol]
+            assert code[offset:offset+4]==bytes.fromhex('00000094')
+            code[offset:offset+4]=branch(CAVE+offset,target)
+            calls.append(dict(offset=hex(offset),symbol=symbol,target=hex(target)))
+    assert len(calls)==2
+    return bytes(code),addresses,calls
+
+def main():
+    os.umask(0o077)
+    source=ROOT/'prepared/test-12-before-deferred-flush-boot-adb-only.img'
+    target=ROOT/'prepared/test-13-deferred-observability-boot-adb-only.img'
+    paths=[target,target.with_suffix('.validation.json'),target.with_suffix('.img.json')]
+    assert not any(p.exists() for p in paths)
+    data=source.read_bytes()
+    assert SHA(data)=='a2eed15eb70e83876dd3e306fadadbf52702d0a80e3b621cfeb237eb9adbb1bb'
+    boot=BootImage(data);_,raw,tail=gzip_member(boot.kernel)
+    assert SHA(raw)=='c54f51d7c426509b4cd61f4c0338f1baa7b92f99fb18a08386ba5b6031e453c2'
+    assert raw[STUB-BASE:STUB-BASE+8]==bytes.fromhex('e0031f2ac0035fd6')
+    blacklist=next(t.split('=',1)[1].split(',') for t in boot.cmdline.split() if t.startswith('initcall_blacklist='))
+    assert len(blacklist)==8 and 'msm_pil_init' in blacklist
+    smap=(ROOT/'kernel-analysis/twrp-3.7.0.System.map').read_bytes()
+    assert SHA(smap)=='532606e92b85d81d98786af6263d03747bf2644705fb794df5614b96add386d0'
+    names={l.split()[-1]:int(l.split()[0],16) for l in smap.decode().splitlines() if len(l.split())==3}
+    assert names['flush_workqueue']==EXTERNAL['flush_workqueue'] and names['msm_pil_init']==STUB
+    assert names['free_initmem']==0xffffff800809ba08 and names['async_synchronize_full']==0xffffff80080cfbd8
+    assert names['__init_begin']==0xffffff8009750000 and names['__init_end']==0xffffff80097f0000
+    asm=ROOT/'test13_conditional_flush.S'
+    with tempfile.TemporaryDirectory() as d:
+        obj=Path(d)/'helper.o'
+        subprocess.run(['/usr/bin/clang','--target=aarch64-none-elf','-c',str(asm),'-o',str(obj)],check=True)
+        code,addresses,calls=link_object(obj.read_bytes())
+    assert len(code)==48 and CAVE+len(code)<0xffffff800978684c
+    patched=bytearray(raw);patched[CAVE-BASE:CAVE-BASE+len(code)]=code
+    instruction_patches=[
+        (0xffffff800867ecd4,branch(0xffffff800867ecd4,EXTERNAL['flush_workqueue']),branch(0xffffff800867ecd4,CAVE)),
+        (0xffffff800867ed98,branch(0xffffff800867ed98,EXTERNAL['flush_workqueue']),branch(0xffffff800867ed98,CAVE)),
+        (0xffffff800904453c,branch(0xffffff800904453c,names['free_initmem']),bytes.fromhex('1f2003d5'))]
+    for pc,old,new in instruction_patches:
+        assert raw[pc-BASE:pc-BASE+4]==old
+        patched[pc-BASE:pc-BASE+4]=new
+    # Retain power votes while deliberately permitting outstanding deferred work.
+    cleanup=[(686,'regulator_init_complete',0xffffff80097890f0),
+             (687,'regulator_proxy_consumer_remove_all',0xffffff8009789370),
+             (688,'clock_late_init',0xffffff80097a1370)]
+    table=0x174be28
+    original_pointers=list(struct.unpack_from('<690Q',raw,table));expected=original_pointers.copy()
+    for index,name,address in cleanup:
+        assert names[name]==address and original_pointers[index]==address
+        expected[index]=STUB
+        struct.pack_into('<Q',patched,table+index*8,STUB)
+    assert list(struct.unpack_from('<690Q',patched,table))==expected
+    assert patched[0xfc4538:0xfc453c]==branch(0xffffff8009044538,names['async_synchronize_full'])
+    assert patched[0xfc4540:0xfc4570]==raw[0xfc4540:0xfc4570]
+    intervals=[(CAVE-BASE,CAVE-BASE+len(code)),(table+686*8,table+689*8)]
+    intervals += [(pc-BASE,pc-BASE+4) for pc,_,_ in instruction_patches]
+    changes=[i for i,(a,b) in enumerate(zip(raw,patched)) if a!=b]
+    assert all(any(lo<=i<hi for lo,hi in intervals) for i in changes)
+    signed=sign_image(boot.rebuild(kernel=gzip.compress(bytes(patched),compresslevel=9,mtime=0)+tail),
+                      '/boot',str(ROOT/'keys/axon-m-local.key'),str(ROOT/'keys/axon-m-local.pem'))
+    new=BootImage(signed);_,checked,newtail=gzip_member(new.kernel)
+    assert checked==patched and newtail==tail and new.ramdisk==boot.ramdisk and new.cmdline==boot.cmdline
+    assert boot.rebuild(kernel=new.kernel)==new.payload
+    info=report(signed)
+    assert info['signature_verified'] and info['boot_id_valid'] and info['signature_target']=='/boot'
+    assert all(t['free_tail_bytes']==8192 for t in info['dtbs'])
+    v=dict(source_image=source.name,source_sha256=SHA(data),image=target.name,image_bytes=len(signed),
+           image_sha256=SHA(signed),padded_sha256=SHA(signed+b'\0'*(-len(signed)%512)),raw_sha256=SHA(patched),
+           changed_raw_bytes=len(changes),changed_raw_offsets=changes,permitted_intervals=[[hex(a),hex(b)] for a,b in intervals],
+           helper_address=hex(CAVE),helper_bytes=len(code),helper_sha256=SHA(code),helper_calls=calls,
+           patches=[dict(address=hex(pc),old=old.hex(),new=new.hex()) for pc,old,new in instruction_patches],
+           temporarily_skipped_late_cleanups=[dict(index=i,name=n,address=hex(a),replacement=hex(STUB)) for i,n,a in cleanup],
+           other_687_initcalls_preserved=True,queues_and_retries_preserved=True,
+           earlier_sync_flushes_preserved_unless_green_led_already_registered=True,
+           retained_init_memory_bytes=0xa0000,async_wait_and_memory_protection_preserved=True,
+           pre_enable_pulse_unchanged=True,dt_ramdisk_cmdline_unchanged=True,
+           signature_verified=True,boot_id_valid=True,hardware_tested=False,
+           interpretation='Temporary observability image, not a production fix. Once green exists, let init proceed without waiting for deferred work; keep queued retries running, retain init memory and three late power/clock cleanup votes. If adb appears capture dmesg and worker stacks immediately. Failure remains inconclusive: later initcalls, async work, device locks, global faults or missing USB dependencies can still block.')
+    for p,b in [(paths[0],signed),(paths[1],(json.dumps(v,indent=2)+'\n').encode()),(paths[2],(json.dumps(info,indent=2)+'\n').encode())]:
+        with p.open('xb') as f:f.write(b)
+    with (ROOT/'test13-linked-helper.bin').open('xb') as f:f.write(code)
+    print(json.dumps({k:x for k,x in v.items() if k!='changed_raw_offsets'},indent=2))
+
+if __name__=='__main__':main()

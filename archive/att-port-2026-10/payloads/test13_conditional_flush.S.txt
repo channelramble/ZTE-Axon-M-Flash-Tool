@@ -1,0 +1,20 @@
+/* Diagnostic only: earlier sync levels retain their actual deferwq flush.
+ * Once the calibrated green LED exists, let init continue without waiting.
+ * This does not cancel, drain, or suppress any queued deferred work.
+ */
+.text
+.globl conditional_flush
+conditional_flush:
+    stp x29, x30, [sp, #-32]!
+    str x19, [sp, #16]
+    mov x29, sp
+    mov x19, x0
+    mov w0, #255
+    bl green_sync
+    cbnz w0, .Ldone
+    mov x0, x19
+    bl flush_workqueue
+.Ldone:
+    ldr x19, [sp, #16]
+    ldp x29, x30, [sp], #32
+    ret

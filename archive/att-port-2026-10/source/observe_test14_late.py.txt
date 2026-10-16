@@ -1,0 +1,20 @@
+from pathlib import Path
+import datetime,json,os,subprocess,time
+import usb.core
+os.umask(0o077)
+r=Path(__file__).resolve().parent
+out=r/'test14-late-logo-disappearance';out.mkdir(mode=0o700,exist_ok=False)
+a=Path.home()/'.local/share/axon-m-edl/platform-tools-29.0.6/adb'
+observations=[];last=None;start=time.monotonic()
+while time.monotonic()-start<60:
+ p=subprocess.run([str(a),'-P','5038','devices'],capture_output=True,text=True,timeout=10)
+ states=[x.split()[1] for x in p.stdout.splitlines()[1:] if len(x.split())>=2]
+ ids=sorted((x.idVendor,x.idProduct) for x in usb.core.find(find_all=True))
+ item={'utc':datetime.datetime.now(datetime.timezone.utc).isoformat(),'elapsed_seconds':round(time.monotonic()-start,1),'adb_states':states,'usb_ids':[{'vid':hex(v),'pid':hex(p)} for v,p in ids]}
+ observations.append(item);(out/'observations.json').write_text(json.dumps(observations,indent=2)+'\n')
+ if (states,ids)!=last:print(json.dumps(item),flush=True);last=(states,ids)
+ if any(x in ('device','recovery') for x in states):
+  subprocess.run(['/EXAMPLE/REMOTE_HOME/.local/share/axon-m-edl/.venv/bin/python',str(r/'capture_test14_adb.py')],check=True,timeout=130)
+  break
+ time.sleep(5)
+print(json.dumps({'observation_complete':True,'samples':len(observations),'final_adb_states':observations[-1]['adb_states'],'edl_seen':any(any(x=={'vid':'0x5c6','pid':'0x9008'} for x in o['usb_ids']) for o in observations)}),flush=True)

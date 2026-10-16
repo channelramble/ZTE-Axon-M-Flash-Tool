@@ -1,0 +1,29 @@
+
+import subprocess,json
+from pathlib import Path
+adb=['/EXAMPLE/REMOTE_HOME/.local/share/axon-m-edl/platform-tools-29.0.6/adb','-P','5038','-d']
+out=Path('/EXAMPLE/REMOTE_HOME/.local/share/axon-m-edl/sessions/SESSION_ID/test06-reader-control/live-baseline')
+cmd=r'''
+set -e
+if grep -q 'mmcblk0p20 ' /proc/mounts; then echo 'System already mounted; inspect before proceeding'; exit 3; fi
+mkdir /tmp/axon-system-ro
+mount -t ext4 -o ro,noload /dev/block/bootdevice/by-name/system /tmp/axon-system-ro
+trap 'umount /tmp/axon-system-ro' EXIT
+cat /proc/mounts | grep ' /tmp/axon-system-ro '
+cp /tmp/axon-system-ro/build.prop /tmp/axon-system-build.prop
+mkdir /tmp/axon-system-gpu
+for d in etc/firmware vendor/firmware; do
+ for f in /tmp/axon-system-ro/$d/a530_zap.*; do
+  if [ -f "$f" ]; then cp "$f" /tmp/axon-system-gpu/; fi
+ done
+done
+tar -C /tmp/axon-system-gpu -cf /tmp/axon-system-gpu.tar .
+ls -l /tmp/axon-system-gpu
+'''
+r=subprocess.run(adb+['shell',cmd],capture_output=True,timeout=45)
+(out/'system-readonly-capture.log').write_bytes(r.stdout+r.stderr)
+print(json.dumps({'readonly_system_capture_exit':r.returncode}),flush=True)
+if r.returncode==0:
+ for src,name in [('/tmp/axon-system-build.prop','system-build.prop'),('/tmp/axon-system-gpu.tar','system-gpu-firmware.tar')]:
+  r=subprocess.run(adb+['pull',src,str(out/name)],capture_output=True,timeout=45)
+  print(json.dumps({'capture':name,'exit':r.returncode}),flush=True)

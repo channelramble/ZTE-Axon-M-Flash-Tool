@@ -1,0 +1,213 @@
+#!/usr/bin/env python3
+"""Offline only: exercise reset guards with fake USB and a sparse system file."""
+import contextlib
+import hashlib
+import importlib.util
+import io
+import json
+from pathlib import Path
+import tempfile
+import types
+import unittest
+from unittest.mock import patch
+
+HERE = Path(__file__).resolve().parent
+
+
+class ResetGuards(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix='axon-test23-reset-')
+        self.root = Path(self.temp.name)
+        self.out = self.root / 'test23-edl-system-write'
+        (self.out / 'protected-after').mkdir(parents=True)
+        self.events = []
+        self.fresh_change = None
+        self.short_write = False
+        self.ack_error = False
+        self.full_hash_wrong = False
+        fake_read = types.ModuleType('firehose_read')
+        fake_boot = types.ModuleType('firehose_boot_test')
+        test = self
+
+        class Reader:
+            def __init__(self, log):
+                test.events.append('Reader')
+                self.ep_out = self
+
+            def configure(self):
+                test.events.append('configure')
+
+            def read(self, start, count, path):
+                name = path.stem
+                test.events.append(('read', start, count))
+                data = (test.out / 'protected-after' / (name + '.bin')).read_bytes()
+                if test.fresh_change == name:
+                    data = data[:-1] + bytes([data[-1] ^ 1])
+                path.write_bytes(data)
+                return {'sha256': hashlib.sha256(data).hexdigest()}
+
+            def write(self, encoded, timeout):
+                state = json.loads((test.root / 'test23-edl-reset/reset-result.json').read_text())
+                test.assertTrue(state['reset_attempted'])
+                test.assertFalse(state['reset_sent'])
+                test.assertEqual(encoded, b'<?xml version="1.0" ?><data><power value="reset"/></data>')
+                test.assertEqual(timeout, 3000)
+                test.events.append('RESET')
+                return len(encoded) - int(test.short_write)
+
+            def response(self, timeout):
+                test.assertEqual(timeout, 5)
+                test.events.append('response')
+                if test.ack_error:
+                    raise TimeoutError('simulated disconnect')
+
+            def close(self):
+                test.events.append('close')
+
+        def save_state(path, state):
+            path.write_text(json.dumps(state))
+
+        fake_read.Reader = Reader
+        fake_boot.save_state = save_state
+        spec = importlib.util.spec_from_file_location('reset23_under_test', HERE / 'reset_test23_verified.py')
+        self.module = importlib.util.module_from_spec(spec)
+        with patch.dict('sys.modules', {'firehose_read': fake_read, 'firehose_boot_test': fake_boot}):
+            spec.loader.exec_module(self.module)
+        self.module.ROOT = self.root
+        real_digest = self.module.digest
+
+        def digest(path):
+            if path.name == 'system-after.bin':
+                return '0' * 64 if test.full_hash_wrong else self.module.TARGET
+            return real_digest(path)
+
+        self.module.digest = digest
+        # Sparse logical size tests the actual stat guard without allocating 7 GB;
+        # its content hash is deliberately mocked, all other hashes are real.
+        with (self.out / 'system-after.bin').open('wb') as stream:
+            stream.truncate(6979321856)
+        self.protected = {}
+        for name, size in [('gpt', 7168), ('boot', 1024), ('recovery', 1024), ('misc', 1048576)]:
+            path = self.out / 'protected-after' / (name + '.bin')
+            path.write_bytes(bytes(size))
+            self.protected[name] = real_digest(path)
+        self.state = {'complete': True, 'full_readback_verified': True,
+                      'protected_partitions_verified': True, 'reset_sent': False,
+                      'userdata_written': False, 'system_after': {'sha256': self.module.TARGET}}
+        self.receipt = {'complete': True, 'both_macs_verified': True,
+                        'all_1_block_readbacks_verified': True,
+                        'system_sha256': self.module.TARGET, 'system_bytes': 6979321856,
+                        'protected_sha256': self.protected}
+        self.save()
+
+    def tearDown(self):
+        self.temp.cleanup()
+
+    def save(self):
+        transaction = self.out / 'transaction.json'
+        transaction.write_text(json.dumps(self.state))
+        self.receipt['transaction_sha256'] = hashlib.sha256(transaction.read_bytes()).hexdigest()
+        (self.out / 'local-verification.json').write_text(json.dumps(self.receipt))
+
+    def run_main(self):
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.module.main()
+
+    def rejects_before_usb(self):
+        with self.assertRaises((AssertionError, FileExistsError)):
+            self.run_main()
+        self.assertEqual(self.events, [])
+
+    def test_valid_once_then_existing_journal_rejects(self):
+        self.run_main()
+        self.assertEqual(self.events, ['Reader', 'configure', ('read', 0, 14),
+                                      ('read', 18626584, 2048), 'RESET', 'response', 'close'])
+        result = json.loads((self.root / 'test23-edl-reset/reset-result.json').read_text())
+        self.assertTrue(result['reset_sent'] and result['reset_ack'])
+        self.assertFalse(result['automatic_retry'])
+        self.events.clear()
+        self.rejects_before_usb()
+
+    def test_incomplete_full_readback(self):
+        self.state['full_readback_verified'] = False
+        self.save()
+        self.rejects_before_usb()
+
+    def test_missing_second_mac_receipt(self):
+        self.receipt['both_macs_verified'] = False
+        self.save()
+        self.rejects_before_usb()
+
+    def test_missing_one_block_readback(self):
+        self.receipt['all_1_block_readbacks_verified'] = False
+        self.save()
+        self.rejects_before_usb()
+
+    def test_transaction_hash_changed(self):
+        (self.out / 'transaction.json').write_text(json.dumps(self.state) + ' ')
+        self.rejects_before_usb()
+
+    def test_wrong_target(self):
+        self.state['system_after']['sha256'] = '0' * 64
+        self.receipt['system_sha256'] = '0' * 64
+        self.save()
+        self.rejects_before_usb()
+
+    def test_wrong_full_system_rehash(self):
+        self.full_hash_wrong = True
+        self.rejects_before_usb()
+
+    def test_wrong_system_size(self):
+        with (self.out / 'system-after.bin').open('r+b') as stream:
+            stream.truncate(4096)
+        self.rejects_before_usb()
+
+    def test_protected_file_changed(self):
+        (self.out / 'protected-after/boot.bin').write_bytes(b'changed')
+        self.rejects_before_usb()
+
+    def test_bcb_not_empty_even_when_hashes_match(self):
+        path = self.out / 'protected-after/misc.bin'
+        path.write_bytes(b'boot-recovery' + path.read_bytes()[13:])
+        self.protected['misc'] = hashlib.sha256(path.read_bytes()).hexdigest()
+        self.save()
+        self.rejects_before_usb()
+
+    def test_fresh_misc_change_prevents_reset(self):
+        self.fresh_change = 'misc'
+        with self.assertRaises(AssertionError):
+            self.run_main()
+        self.assertNotIn('RESET', self.events)
+        self.assertEqual(self.events[-1], 'close')
+        result = json.loads((self.root / 'test23-edl-reset/reset-result.json').read_text())
+        self.assertFalse(result['reset_attempted'])
+
+    def test_fresh_gpt_change_prevents_reset(self):
+        self.fresh_change = 'gpt'
+        with self.assertRaises(AssertionError):
+            self.run_main()
+        self.assertNotIn('RESET', self.events)
+        self.assertEqual(self.events[-1], 'close')
+
+    def test_short_write_is_not_retried(self):
+        self.short_write = True
+        self.run_main()
+        self.assertEqual(self.events.count('RESET'), 1)
+        self.assertNotIn('response', self.events)
+        result = json.loads((self.root / 'test23-edl-reset/reset-result.json').read_text())
+        self.assertTrue(result['reset_attempted'])
+        self.assertFalse(result['reset_sent'] or result['reset_ack'])
+        self.assertIn('Short reset write', result['response_note'])
+
+    def test_disconnect_after_send_is_not_retried(self):
+        self.ack_error = True
+        self.run_main()
+        self.assertEqual(self.events.count('RESET'), 1)
+        result = json.loads((self.root / 'test23-edl-reset/reset-result.json').read_text())
+        self.assertTrue(result['reset_sent'])
+        self.assertFalse(result['reset_ack'])
+        self.assertIn('TimeoutError', result['response_note'])
+
+
+if __name__ == '__main__':
+    unittest.main()

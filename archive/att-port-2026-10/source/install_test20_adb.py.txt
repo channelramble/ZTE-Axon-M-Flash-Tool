@@ -1,0 +1,220 @@
+#!/usr/bin/env python3
+"""Guarded, separately authorized Test20 install stages. Default is read-only.
+
+Runs on MacBook, never resets. Requires a package-bound authorization receipt
+before any partition write. A started/failed write cannot automatically retry.
+"""
+from pathlib import Path
+import argparse,datetime,hashlib,json,os,re,struct,subprocess,threading,time,zlib
+ROOT=Path(__file__).resolve().parent
+PKG=ROOT/'test20-package-v1';BEFORE=ROOT/'test20-before-adb'
+ADB=str(Path.home()/'.local/share/axon-m-edl/platform-tools-29.0.6/adb')
+FILES={'boot':('boot.img',13976627,'0651435c4575980f2a851bb1f47d59f4a72a1bb56ccebd56904886e8282991b6'),
+       'recovery':('recovery-control.img',26625079,'1a0c052cbc5561c50bd4dc9fde6d36573bda8beb04e5b5574e04c8a5fe9f6a9f'),
+       'system':('system.img',6979321856,'7c32f735219768f31444400c67cf996b5f80de4c17d0d1c1ed65a7d0acf0883a')}
+GEOMETRY={'boot':(18,1050624,131072,'179:18'),'recovery':(19,1181696,131072,'179:19'),
+          'system':(20,1312768,13631488,'179:20'),'userdata':(48,19083264,103059423,'259:16')}
+ORDER=['recovery','system','userdata','boot','final']
+BASELINE={'boot':'da1ca2689b3bbb16d9783c48b1ab26809184a31f8efa650dac1cadd029f1399d',
+          'recovery':'29b5052e639b46c2ea08c2cbdae59ecbb2e4a38b97f7b4e703019db83434cff8',
+          'system':'13c66498cc6c8f5c4a32e9d813f5515d87f92e618d7619fa06f40658ee1bda9f',
+          'persist':'dc8f6867d1bc05d0f2b3db355ae9de0d6fe6939b1877a4f19c6f6ce0572fedf1',
+          'dcmlog':'91954899b2f7818b05fb6e0a4944c0cca9b1470fb3554b8507ee61be087989ef'}
+sha=lambda b:hashlib.sha256(b).hexdigest()
+def file_sha(p):
+ h=hashlib.sha256()
+ with p.open('rb') as f:
+  for b in iter(lambda:f.read(4194304),b''):h.update(b)
+ return h.hexdigest()
+def load(p):return json.loads(p.read_text())
+def sync_dir(path):
+ fd=os.open(path,os.O_RDONLY)
+ try:os.fsync(fd)
+ finally:os.close(fd)
+def save(p,value):
+ t=p.with_name(p.name+'.tmp')
+ with t.open('w') as f:
+  f.write(json.dumps(value,indent=2)+'\n');f.flush();os.fsync(f.fileno())
+ t.replace(p);sync_dir(p.parent)
+
+class Install:
+ def __init__(self):
+  rows=[l.split() for l in subprocess.check_output([ADB,'-P','5038','devices'],timeout=10).decode().splitlines()[1:] if len(l.split())>=2]
+  assert len(rows)==1 and rows[0][1]=='recovery'
+  self.base=[ADB,'-P','5038','-s',rows[0][0]]
+  assert self.cmd('id -u')=='0' and self.cmd('uname -r')=='4.4.302-cip112-fujisan'
+  assert self.cmd('getprop ro.lineage.version')=='23.2-20261006-UNOFFICIAL-fujisan'
+  self.audit=load(BEFORE/'audit.json');self.receipt=load(BEFORE/'local-verification.json')
+  assert self.audit['complete'] and self.audit['misc_all_zero'] and self.receipt['complete'] and self.receipt['both_macs_verified']
+  assert self.audit['partition_hashes']==BASELINE and self.receipt['files']==self.audit['files']
+  assert self.audit['files']['misc.bin']['sha256']=='30e14955ebf1352266dc2ff8067e68104607e750abb9d3b36582b8af909fcb58'
+  assert self.audit['files']['gpt-main.bin']['sha256']=='7f1e4fd44e69e004189f0256ce6d35addfb1e3dbfe1cd55bfd2047b580b1e891'
+  staged=load(PKG/'staging-verification.json');assert staged['complete'] and staged['saved_copy_readback_verified']
+  self.out=ROOT/'test20-install';self.journal=self.out/'state.json'
+ def cmd(self,command,timeout=15):
+  return subprocess.check_output(self.base+['exec-out','sh','-c',command],timeout=timeout).decode().strip()
+ def digest(self,node,timeout=240):
+  value=self.cmd('sha256sum '+node,timeout).split()[0];assert re.fullmatch('[0-9a-f]{64}',value);return value
+ def node(self,name):return '/dev/block/mmcblk0p'+str(GEOMETRY[name][0])
+ def geometry(self,name):
+  index,start,sectors,dev=GEOMETRY[name];base=f'/sys/class/block/mmcblk0p{index}/'
+  assert self.cmd('cat '+base+'start')==str(start)
+  assert self.cmd('cat '+base+'size')==str(sectors)
+  assert self.cmd('cat '+base+'dev')==dev
+  assert self.cmd('if [ -b '+self.node(name)+' ] && [ ! -L '+self.node(name)+' ]; then echo OK; fi')=='OK'
+  for line in self.cmd('cat /proc/mounts').splitlines():
+   devpath,point=line.split()[:2]
+   if devpath.startswith('/dev/block/'):assert self.cmd('readlink -f '+devpath)!=self.node(name)
+   if name=='system':assert point not in ('/system','/system_root')
+   if name=='userdata':assert point!='/data'
+ def verify_file(self,name):
+  filename,size,digest=FILES[name];p=PKG/filename
+  assert p.is_file() and not p.is_symlink() and p.stat().st_size==size and file_sha(p)==digest
+  return p
+ def authorize(self):
+  auth=load(PKG/'authorization.json')
+  assert auth['explicit_clean_install_approved'] is True and auth['userdata_erasure_approved'] is True
+  assert auth['image_sha256']=={k:v[2] for k,v in FILES.items()}
+  assert auth['userdata_geometry']==list(GEOMETRY['userdata'])
+  assert isinstance(auth['owner_instruction'],str) and auth['owner_instruction'].strip()
+ def begin(self,phase):
+  self.authorize()
+  if self.journal.exists():state=load(self.journal)
+  else:
+   assert phase=='recovery';self.out.mkdir(mode=0o700,exist_ok=False);sync_dir(ROOT)
+   state={'completed':[],'started_phase':None,'phone_reset':False,'image_sha256':{k:v[2] for k,v in FILES.items()}}
+  assert state['image_sha256']=={k:v[2] for k,v in FILES.items()}
+  assert state['started_phase'] is None,'An interrupted phase requires review; never retry automatically'
+  assert state['completed']==ORDER[:ORDER.index(phase)]
+  state['started_phase']=phase;save(self.journal,state);return state
+ def finish(self,phase,state,result):
+  state[phase]=result;state['completed'].append(phase);state['started_phase']=None
+  state['updated_at']=datetime.datetime.now(datetime.timezone.utc).isoformat();save(self.journal,state)
+ def helper(self,name,script):
+  local=self.out/(name+'.sh');assert not local.exists();local.write_text(script)
+  remote='/tmp/axon-test20-install-'+name+'.sh'
+  assert self.cmd('if [ -e '+remote+' ] || [ -L '+remote+' ]; then echo EXISTS; else echo ABSENT; fi')=='ABSENT'
+  subprocess.run(self.base+['push',str(local),remote],capture_output=True,check=True,timeout=20)
+  assert self.digest(remote)==sha(script.encode());return remote
+ def guard_script(self,name):
+  index,start,sectors,dev=GEOMETRY[name];node=self.node(name)
+  return f'''#!/system/bin/sh
+set -eu
+PATH=/system/bin
+export PATH
+[ "$(id -u)" = 0 ]
+[ -b {node} ] && [ ! -L {node} ]
+[ "$(cat /sys/class/block/mmcblk0p{index}/start)" = {start} ]
+[ "$(cat /sys/class/block/mmcblk0p{index}/size)" = {sectors} ]
+[ "$(cat /sys/class/block/mmcblk0p{index}/dev)" = {dev} ]
+while IFS=' ' read -r source point fs rest; do
+    case "$source" in /dev/block/*) [ "$(readlink -f "$source")" != {node} ] || exit 90 ;; esac
+done < /proc/mounts
+'''
+ def write_image(self,name):
+  source=self.verify_file(name);self.geometry(name)
+  before_sha=self.audit['partition_hashes'][name]
+  assert self.digest(self.node(name))==before_sha
+  count=FILES[name][1];padding=(-count)%512;total=count+padding
+  assert total<=GEOMETRY[name][2]*512
+  expected_full=None
+  if name in ('boot','recovery'):
+   original=(BEFORE/(name+'.bin')).read_bytes();assert sha(original)==before_sha
+   expected=source.read_bytes()+b'\0'*padding+original[total:];expected_full=sha(expected)
+  state=self.begin(name)
+  script=self.guard_script(name)+f'''set -o pipefail
+gzip -dc | head -c {total} | dd of={self.node(name)} bs=1048576 conv=notrunc,fsync
+echo AXON_TEST20_WRITE_COMPLETE
+'''
+  remote=self.helper(name,script);compress=zlib.compressobj(1,zlib.DEFLATED,31);h=hashlib.sha256();read=0;next_progress=1024**3;began=time.monotonic()
+  log=self.out/(name+'-write.log')
+  with log.open('xb') as f:
+   proc=subprocess.Popen(self.base+['shell','-T','timeout','-k','5','1770','sh',remote],stdin=subprocess.PIPE,stdout=f,stderr=subprocess.STDOUT)
+   # A blocked pipe write must not prevent the host deadline firing. A kernel
+   # D-state operation can still survive cancellation: the journal locks retry.
+   expired=threading.Event()
+   def deadline():
+    expired.set()
+    if proc.poll() is None:proc.kill()
+   watchdog=threading.Timer(1800,deadline);watchdog.daemon=True;watchdog.start()
+   try:
+    with source.open('rb') as inp:
+     for b in iter(lambda:inp.read(1048576),b''):
+      assert time.monotonic()-began<1800
+      read+=len(b);h.update(b);chunk=compress.compress(b)
+      if chunk:proc.stdin.write(chunk)
+      if read>=next_progress:print(json.dumps({'phase':name,'raw_bytes_streamed':read,'total':count}),flush=True);next_progress+=1024**3
+    assert read==count and h.hexdigest()==FILES[name][2]
+    if padding:proc.stdin.write(compress.compress(b'\0'*padding))
+    proc.stdin.write(compress.flush());proc.stdin.close()
+    assert proc.wait(timeout=180)==0 and not expired.is_set()
+   finally:
+    watchdog.cancel()
+    if proc.poll() is None:proc.kill();proc.wait()
+  assert 'AXON_TEST20_WRITE_COMPLETE' in log.read_text()
+  actual=self.digest(self.node(name))
+  assert actual==(expected_full or FILES[name][2])
+  result={'full_partition_sha256':actual,'full_native_readback_verified':True,'written_bytes':total}
+  if name in ('boot','recovery'):
+   path=self.out/(name+'-readback.bin')
+   with path.open('xb') as f:
+    subprocess.run(self.base+['exec-out','cat',self.node(name)],stdout=f,check=True,timeout=90)
+   assert path.stat().st_size==67108864 and file_sha(path)==expected_full
+   assert path.read_bytes()==expected
+   result['host_full_readback_and_preserved_tail_verified']=True
+  self.cmd('rm '+remote);self.finish(name,state,result);print(json.dumps({'phase':name,'verified':True}),flush=True)
+ def format_data(self):
+  self.geometry('userdata')
+  assert self.digest('/system/bin/make_f2fs')=='d16701e710da2f90663aeb2e4cb747f294beca06a3b4d959ee794547c766a332'
+  assert self.digest('/system/bin/fsck.f2fs')=='c108944028753b7a9de1b2a261bbe5f5f45366ef8b1aad2eded30995b34b37c9'
+  state=self.begin('userdata');index,start,sectors,dev=GEOMETRY['userdata']
+  script=self.guard_script('userdata')+f'''
+make_f2fs -f -t 0 -r -T 0 /dev/block/mmcblk0p{index} {sectors}
+sync
+fsck.f2fs --dry-run /dev/block/mmcblk0p{index}
+echo AXON_TEST20_FORMAT_AND_FSCK_COMPLETE
+'''
+  remote=self.helper('userdata',script)
+  log=self.out/'userdata-format.log'
+  with log.open('xb') as f:
+   subprocess.run(self.base+['shell','-T','timeout','-k','5','270','sh',remote],stdout=f,stderr=subprocess.STDOUT,check=True,timeout=300)
+  text=log.read_text();assert 'AXON_TEST20_FORMAT_AND_FSCK_COMPLETE' in text and 'superblock features = 0 :' in text and '[Fail' not in text
+  headers=subprocess.check_output(self.base+['exec-out','head','-c','8192',self.node('userdata')],timeout=15)
+  assert len(headers)==8192 and struct.unpack_from('<I',headers,1024)[0]==0xf2f52010
+  assert headers[1024:4096]==headers[5120:8192]
+  # Packed f2fs_super_block layout, Linux v4.4 include/linux/f2fs_fs.h:
+  # https://raw.githubusercontent.com/torvalds/linux/v4.4/include/linux/f2fs_fs.h
+  assert struct.unpack_from('<III',headers,1024+8)==(9,3,12)
+  assert struct.unpack_from('<Q',headers,1024+36)[0]==sectors//8
+  again=subprocess.check_output(self.base+['exec-out','head','-c','8192',self.node('userdata')],timeout=15)
+  assert sha(again)==sha(headers)
+  (self.out/'userdata-superblocks.bin').write_bytes(headers)
+  self.cmd('rm '+remote)
+  self.finish('userdata',state,{'formatted_f2fs':True,'filesystem_features':0,'dry_run_fsck_passed':True,
+             'primary_backup_superblocks_equal':True,'repeated_header_readback_sha256':sha(headers),
+             'whole_userdata_image_hash_not_applicable_to_in_place_format':True})
+  print(json.dumps({'phase':'userdata','format_and_readback_verified':True}),flush=True)
+ def final(self):
+  state=self.begin('final')
+  gpt=subprocess.check_output(self.base+['exec-out','head','-c','7168','/dev/block/mmcblk0'],timeout=15)
+  assert sha(gpt)==self.audit['files']['gpt-main.bin']['sha256']
+  for name in ('boot','recovery','system'):
+   assert self.digest(self.node(name))==state[name]['full_partition_sha256']
+  assert self.digest('/dev/block/mmcblk0p38')==self.audit['files']['misc.bin']['sha256']
+  for name,index in [('persist',37),('dcmlog',47)]:assert self.digest('/dev/block/mmcblk0p'+str(index))==self.audit['partition_hashes'][name]
+  self.finish('final',state,{'installed_partition_hashes_rechecked':True,'gpt_misc_persist_dcmlog_unchanged':True,'reset_performed':False,'owner_restart_pending':True})
+  print(json.dumps({'installation_verified':True,'reset_performed':False}),flush=True)
+ def preflight(self):
+  for name in FILES:self.verify_file(name);self.geometry(name)
+  self.geometry('userdata')
+  print(json.dumps({'files_and_geometry_pass':True,'phone_writes':False,'authorization_present':(PKG/'authorization.json').exists(),'automatic_reset':False}),flush=True)
+
+def main():
+ os.umask(0o077)
+ parser=argparse.ArgumentParser();parser.add_argument('phase',choices=['preflight']+ORDER,nargs='?',default='preflight');args=parser.parse_args()
+ obj=Install()
+ if args.phase=='preflight':obj.preflight()
+ elif args.phase=='userdata':obj.format_data()
+ elif args.phase=='final':obj.final()
+ else:obj.write_image(args.phase)
+if __name__=='__main__':main()

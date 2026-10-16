@@ -1,0 +1,14 @@
+# Full-Android diagnostic only; started explicitly after bootstrap APEX setup.
+service axon-diag-test20 /system/bin/sh /system/etc/axon-diag-test20-collect.sh
+    user root
+    group root system log readproc
+    seclabel u:r:init:s0
+    disabled
+    oneshot
+
+service axon-save-test20 /system/bin/sh /system/etc/axon-diag-test20-persist.sh
+    user root
+    group root system log readproc
+    seclabel u:r:init:s0
+    disabled
+    oneshot

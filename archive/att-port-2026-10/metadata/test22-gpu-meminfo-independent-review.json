@@ -1,0 +1,66 @@
+{
+  "result": "pass for exact local diagnostic candidate; hardware runtime untested",
+  "checks": {
+    "source_exact_hash": true,
+    "source_exact_test20_image": true,
+    "original_copy_exact": true,
+    "candidate_exact_hash": true,
+    "same_size": true,
+    "exact_patch_only": true,
+    "exact_differing_bytes": true,
+    "branch_opcode_and_target": true,
+    "false_then_cleanup": true,
+    "jni_exact_hash": true,
+    "jni_initialized_output": true,
+    "jni_boolean_false_minus_one": true,
+    "gpu_total_wrapper_preserved": true,
+    "manifest_source_output_match": true,
+    "builder_in_memory_reproduction": true
+  },
+  "source_sha256": "c818331ef3c3ee086fd832a3f06c2039259d16023f17bd7e2dba4d8bf677e64d",
+  "output_sha256": "040e0c8f97434b8d101914901f55b346c4b27eee8dc82b43f2a766258245a028",
+  "builder_sha256": "2aced7629f7025c0f9b8b7f73ad9e17be9ffb21076888dac937364880de42564",
+  "manifest_sha256": "833b9e62c879f6ac3838957e7b1f1b251c27461d4b20131ddef733ffc4dd2a8f",
+  "jni": {
+    "sha256": "8abc637e886451448c065407d08affa607aba52c5946ea6f08a22d673d09c2e5",
+    "function_start": "0x1be424",
+    "function_end_exclusive": "0x1be47c",
+    "function_sha256": "6c4a177bbc579bb0c6b69c64efe9a2648b68f5d716572afeed7c46198d025e44",
+    "output_pointer": "non-null initialized stack uint64_t at sp",
+    "false_result": "Java jlong -1 via TST W0,#1; CSINV X0,X8,XZR,NE",
+    "errno_used": false
+  },
+  "native_path": [
+    "ReadGpuTotalUsageKb0x14398 preserves output pointer and tailcalls ReadProcessGpuUsageKb with GPU/PID zero",
+    "Map fd initialized -1 at0x1415c, read-only BPF_OBJ_GET0x14184 and ownership adoption0x14194 complete before patch",
+    "Branch0x1419c to0x141fc sets W19=0 and skips Result construction and its destructor0x14230",
+    "Native cleanup0x14248 closes held fd unless -1, using matching fdsan owner tag if available",
+    "Errno restored0x14290; canary and saved registers restored; W0=0 returned0x142a4",
+    "Output pointer not written; native invalid-map failure already has the same contract"
+  ],
+  "framework_source": "AppProfiler checks gpuUsage >= 0 before GPU reporting and accounting; -1 skips this optional block",
+  "sources": [
+    {
+      "url": "https://raw.githubusercontent.com/LineageOS/android_frameworks_base/958afcc3d647d57571650cee4172afe0da619171/core/jni/android_os_Debug.cpp",
+      "sha256": "b866ff6c98069e20102a1b9b2aaf388e2979f85121d7a9038db62d58eea2d00e",
+      "bytes": 30885,
+      "file": "test21-gpu-jni-audit/source-android_os_Debug.cpp"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/LineageOS/android_frameworks_base/958afcc3d647d57571650cee4172afe0da619171/services/core/java/com/android/server/am/AppProfiler.java",
+      "sha256": "5fe81c103e95977c2fd6d729356ab46f43b3a9bdf7ddc3b5243b5a4e2690b511",
+      "bytes": 121210,
+      "file": "test21-gpu-jni-audit/source-AppProfiler.java"
+    }
+  ],
+  "source_limit": "Current published Lineage branch pinned for corroboration; exact ROM source revision not asserted. Exact JNI and libmeminfo instruction bytes were independently examined.",
+  "failure_evidence": "Observed abort call0x178a8 is reached by negative-fd test0x176f4 before map metadata checks. This indicates invalid BPF_OBJ_GET fd; exact errno and cause not captured.",
+  "map_path": "/sys/fs/bpf/map_gpuMem_gpu_mem_total_map",
+  "limits": [
+    "Disables ReadProcessGpuUsageKb accounting even if map becomes valid later",
+    "Generic BPF helper and separate ReadPerProcessGpuMem unchanged; latter can independently encounter missing-map failure",
+    "Existing mapped library is not replaced by changing a filesystem mount; future test must establish a fresh library mapping",
+    "No GPU rendering or kernel correction is claimed",
+    "No phone, SSH, system-image edits, installation or shared artifact modifications performed"
+  ]
+}

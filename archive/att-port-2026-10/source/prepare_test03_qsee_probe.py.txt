@@ -1,0 +1,97 @@
+#!/usr/bin/env python3
+"""Prepare one guarded QSEE probe-failure diagnostic from verified test 02.
+
+No phone access. The one instruction change simulates -ENODEV from the
+first QSEE SCM query, after queues/lists have been initialized. It takes
+the existing failed-probe cleanup path rather than skipping qseecom_init.
+"""
+import gzip
+import hashlib
+import json
+import os
+from pathlib import Path
+import struct
+import sys
+
+ROOT = Path(__file__).resolve().parent
+sys.path.insert(0, str(ROOT.parent / 'ZTE-Axon-M-Flash-Tool/scripts'))
+from fujisan_image import BootImage, gzip_member, report, sign_image
+
+SOURCE_SHA = '4ebf12a656a2c3d38c7e172b6ae5b918c2625cd4be727a75106b00531d74641e'
+RAW_SHA = 'e650ef8942497ccb9dd4783c9c2a2587ccafa266e67a7480a6724f3e27edca4a'
+OFFSET = 0x636a6c
+ORIGINAL = bytes.fromhex('91efff97')  # bl qseecom_scm_call
+REPLACEMENT = bytes.fromhex('40028012')  # movn w0, #18 -> -ENODEV
+
+
+def sha(data):
+    return hashlib.sha256(data).hexdigest()
+
+
+def main():
+    os.umask(0o077)
+    source = ROOT / 'prepared/test-02-gpu-tzlog-boot.img'
+    target = ROOT / 'prepared/test-03-qsee-probe-boot.img'
+    original = source.read_bytes()
+    if sha(original) != SOURCE_SHA:
+        raise ValueError('Test 02 image differs from the reviewed source')
+    boot = BootImage(original)
+    if not boot.id_valid or 'qseecom_init' in boot.cmdline:
+        raise ValueError('Expected verified boot ID and QSEE initializer enabled')
+    _, raw, dt_tail = gzip_member(boot.kernel)
+    if sha(raw) != RAW_SHA or raw[OFFSET:OFFSET+4] != ORIGINAL:
+        raise ValueError('Exact kernel hash/instruction guard failed')
+    # Independently decode the original A64 BL target and replacement MOVN.
+    call = struct.unpack('<I', ORIGINAL)[0]
+    immediate = call & 0x3ffffff
+    if immediate & (1 << 25):
+        immediate -= 1 << 26
+    pc = 0xffffff8008080000 + OFFSET
+    if call >> 26 != 0b100101 or pc + immediate * 4 != 0xffffff80086b28b0:
+        raise ValueError('Original call does not target qseecom_scm_call')
+    move = struct.unpack('<I', REPLACEMENT)[0]
+    if move != 0x12800000 | (18 << 5):
+        raise ValueError('Replacement is not MOVN W0,#18')
+    patched = raw[:OFFSET] + REPLACEMENT + raw[OFFSET+4:]
+    differences = [i for i, (a, b) in enumerate(zip(raw, patched)) if a != b]
+    if differences != list(range(OFFSET, OFFSET+4)) or len(raw) != len(patched):
+        raise ValueError('Unexpected raw kernel changes')
+    kernel = gzip.compress(patched, compresslevel=9, mtime=0) + dt_tail
+    payload = boot.rebuild(kernel=kernel)
+    signed = sign_image(payload, '/boot', str(ROOT/'keys/axon-m-local.key'),
+                        str(ROOT/'keys/axon-m-local.pem'))
+    rebuilt = BootImage(signed)
+    _, final_raw, final_tail = gzip_member(rebuilt.kernel)
+    if final_raw != patched or final_tail != dt_tail:
+        raise ValueError('Kernel/DT roundtrip mismatch')
+    if rebuilt.ramdisk != boot.ramdisk or rebuilt.second != boot.second or rebuilt.cmdline != boot.cmdline:
+        raise ValueError('Unintended ramdisk/second/cmdline change')
+    info = report(signed)
+    if not info['signature_verified'] or not info['boot_id_valid']:
+        raise ValueError('Final signature or boot ID failed')
+    validation = dict(
+        source_image=source.name, source_sha256=SOURCE_SHA,
+        image=target.name, image_bytes=len(signed), image_sha256=sha(signed),
+        padded_sha256=sha(signed + b'\0' * (-len(signed) % 512)),
+        original_raw_kernel_sha256=RAW_SHA, patched_raw_kernel_sha256=sha(patched),
+        raw_kernel_bytes=len(patched), raw_changed_offsets=differences,
+        patch_offset_hex=hex(OFFSET), original_bytes=ORIGINAL.hex(),
+        patched_bytes=REPLACEMENT.hex(),
+        diagnostic_effect='First QSEE probe SCM call returns -ENODEV; take existing failed-probe cleanup after queue/list initialization.',
+        cmdline_bytes=len(boot.cmdline.encode()), ramdisk_unchanged=True,
+        appended_dtbs_unchanged=True, signature_verified=True,
+        boot_id_valid=True, hardware_tested=False,
+        interpretation='QSEE remains unavailable; a successful boot implicates QSEE probe or its downstream work, not necessarily this single SCM query. Negative results remain inconclusive.',
+        log_caveat='Existing error path logs uninitialized resp.result; do not interpret that QSEE version value.',
+    )
+    with target.open('xb') as f:
+        f.write(signed)
+    with target.with_suffix('.validation.json').open('x') as f:
+        json.dump(validation, f, indent=2); f.write('\n')
+    with target.with_suffix('.img.json').open('x') as f:
+        json.dump(info, f, indent=2); f.write('\n')
+    print(json.dumps(validation, indent=2))
+
+
+if __name__ == '__main__':
+    main()

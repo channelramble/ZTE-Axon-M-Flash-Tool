@@ -1,0 +1,19 @@
+from pathlib import Path
+import json,signal,os
+from firehose_read import Reader
+from firehose_boot_test import save_state
+os.umask(0o077)
+root=Path(__file__).resolve().parent
+out=root/'test23-edl-before';out.mkdir(exist_ok=False)
+state={'complete':False,'writes_sent':False,'files':{}}
+def deadline(*args): raise TimeoutError('Read audit deadline, no reset')
+signal.signal(signal.SIGALRM,deadline);signal.alarm(1800)
+with (out/'firehose.xml.log').open('xb') as log:
+ c=Reader(log)
+ try:
+  c.configure()
+  for name,start,count in [('gpt',0,14),('boot',1050624,131072),('recovery',1181696,131072),('misc',18626584,2048),('system',1312768,13631488)]:
+   state['files'][name]=c.read(start,count,out/(name+'.bin'))
+   save_state(out/'audit.json',state)
+  state['complete']=True;save_state(out/'audit.json',state)
+ finally: c.close()

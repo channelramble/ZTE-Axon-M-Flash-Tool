@@ -1,0 +1,66 @@
+{
+  "passed": true,
+  "image_sha256": "508cd08359c6602c36d1bf0a2711dc064bfae509b5773b55933d68ad1f2570a8",
+  "manifest_sha256": "a93ea60ec36fff5fe4a808777a65826b820f6c9b994d4b661c4fd4c909f01255",
+  "image_bytes": 6979321856,
+  "builder_sha256": "9bbe9bcbb6f65645fea38d6145dc85da372780a5440e14d240dec24bfe4fba4a",
+  "verified_files": [
+    {
+      "path": "/system/bin/gatekeeperd",
+      "sha256": "6ad0a440825550c3f5ec504bf438cabcbbb987cf581f088cb939d52164deb5f6",
+      "bytes": 44800,
+      "inode_metadata_xattrs_and_extent_map_exact": true,
+      "metadata_sha256": "c03dfc00009bbdba6584cab44bbde3edc73e3a79a67387d48140ab0b2ce56324"
+    },
+    {
+      "path": "/system/lib64/libmeminfo.so",
+      "sha256": "040e0c8f97434b8d101914901f55b346c4b27eee8dc82b43f2a766258245a028",
+      "bytes": 149304,
+      "inode_metadata_xattrs_and_extent_map_exact": true,
+      "metadata_sha256": "b69a32b5930f4c9c04d17852ec2fa65394957a3520f71c62921317fb058290cf"
+    },
+    {
+      "path": "/system/etc/init/hw/init.rc",
+      "sha256": "54b68ef6f916ea888148665a0fd18b57ad9106f28f41e1686baea0eaf3876a69",
+      "bytes": 59871,
+      "inode_metadata_xattrs_and_extent_map_exact": true,
+      "metadata_sha256": "760f21c52e6f68ae4d5355efb240a7802b3e57a36179b3b0a1d1b698cdcb75b7"
+    },
+    {
+      "path": "/system/etc/axon-diag-test20-collect.sh",
+      "sha256": "42b5c0e9d24dba1195e9c556422c0d5d8df47c339bb82dcfd55b62335dc17bfe",
+      "bytes": 6985,
+      "inode_metadata_xattrs_and_extent_map_exact": true,
+      "metadata_sha256": "8a0db37448018f5094b4686b67675c9a4c912ae02399d4b15f335fa1199ce2a5"
+    },
+    {
+      "path": "/system/etc/axon-diag-test20-persist.sh",
+      "sha256": "34082cdeba9965d2b89b9062c84debbd70d776698513bf0b075a976e3062f374",
+      "bytes": 3445,
+      "inode_metadata_xattrs_and_extent_map_exact": true,
+      "metadata_sha256": "c620f63001d903744786be2cf859d528e8c37e6bd33fbd471a1faee25217d55c"
+    },
+    {
+      "path": "/system/etc/init/axon-diag-test20.rc",
+      "sha256": "a50ae2ff6de6fe962a4c7688c271da3921067c8169e73d7e9e5da34a2d0a4310",
+      "bytes": 438,
+      "inode_metadata_xattrs_and_extent_map_exact": true,
+      "metadata_sha256": "029eb562772f6693a2fc3dfd73b690acbc299b4a2e5173c79861e9bb3c3c9fec"
+    },
+    {
+      "path": "/vendor/etc/init/android.hardware.gatekeeper@1.0-service.rc",
+      "sha256": "172a6f91ce32c0b8cb00e29802d0a50832e01c7813d1accc0c617296fd6ef057",
+      "bytes": 199,
+      "inode_metadata_xattrs_and_extent_map_exact": true,
+      "metadata_sha256": "098a5ed97acf182dd0e53dfe11383c7c90e9b3464e42d848a8b5e2e012c80a96"
+    }
+  ],
+  "all_eight_payload_review_pins_match": true,
+  "exact_seven_path_scope": true,
+  "vendor_gatekeeper_disabled_and_no_lazy_interface": true,
+  "final_image_hash_independently_recomputed": true,
+  "source_image_full_hash_and_all_other_bytes": "relied on reviewed builder completed checks; not redundantly rerun",
+  "readonly_fsck": "reviewed completed clean five-pass receipt; not rerun",
+  "phone_or_ssh_operations": false,
+  "hardware_tested": false
+}

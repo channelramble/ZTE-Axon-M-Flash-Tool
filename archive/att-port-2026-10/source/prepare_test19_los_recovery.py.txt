@@ -1,0 +1,41 @@
+#!/usr/bin/env python3
+"""Assemble a local LOS recovery diagnostic for boot, never touch a device."""
+from pathlib import Path
+import gzip,hashlib,json,os,sys
+ROOT=Path(__file__).resolve().parent
+sys.path.insert(0,str(ROOT));sys.path.insert(0,str(ROOT.parent/'ZTE-Axon-M-Flash-Tool/scripts'))
+from fujisan_image import BootImage,cpio_entries,kernel_dtbs,report,sign_image
+from prepare_los23_recovery_kernel import transform_source,SOURCE_NAME,SOURCE_SHA
+sha=lambda b:hashlib.sha256(b).hexdigest()
+def main():
+ os.umask(0o077)
+ dst=ROOT/'prepared/test-19-los-recovery-boot-adb-only.img'
+ paths=[dst,dst.with_suffix('.validation.json'),dst.with_suffix('.img.json')]
+ assert not any(p.exists() or p.is_symlink() for p in paths)
+ source=(ROOT/SOURCE_NAME).read_bytes();assert sha(source)==SOURCE_SHA
+ kernel,cmdline,kvalidation=transform_source(source)
+ # The separately reviewed init transformation sets permissive explicitly;
+ # this cmdline declares the diagnostic intent but is not relied on alone.
+ assert 'androidboot.selinux=' not in cmdline
+ cmdline+=' androidboot.selinux=permissive'
+ assert len(cmdline.encode())<=1536
+ cpio=(ROOT/'prepared/test-19-los-recovery-ramdisk-v2.cpio').read_bytes()
+ assert sha(cpio)=='be30850f2a904535803d21366e226a5ebcdd0358f1430829c7082d494f1b96d2'
+ entries=cpio_entries(cpio);assert len(entries)==595
+ contents=dict((n,c) for n,f,c,e in entries)
+ assert sha(contents['system/bin/init'])=='714ecace1ad409d588f497d51c738cf0bdb0a1d23ee3029c5b976db5f0e468eb'
+ assert b'axon-diag-test19' in dict((n,c) for n,f,c,e in entries)['system/bin/axon-diag-collect.sh']
+ ramdisk=gzip.compress(cpio,compresslevel=9,mtime=0)
+ boot=BootImage(source)
+ signed=sign_image(boot.rebuild(kernel=kernel,ramdisk=ramdisk,cmdline=cmdline),'/boot',str(ROOT/'keys/axon-m-local.key'),str(ROOT/'keys/axon-m-local.pem'))
+ checked=BootImage(signed);info=report(signed)
+ assert checked.kernel==kernel and checked.ramdisk==ramdisk and checked.cmdline==cmdline and checked.second==boot.second
+ assert boot.rebuild(kernel=checked.kernel,ramdisk=checked.ramdisk,cmdline=checked.cmdline)==checked.payload
+ assert info['signature_verified'] and info['boot_id_valid'] and info['signature_target']=='/boot'
+ assert len(signed)==checked.payload_length+info['signature_bytes']
+ padded=signed+b'\0'*(-len(signed)%512)
+ validation={'source_sha256':SOURCE_SHA,'image_sha256':sha(signed),'image_bytes':len(signed),'padded_sha256':sha(padded),'padded_bytes':len(padded),'ramdisk_cpio_sha256':sha(cpio),'kernel_transfer':kvalidation,'signature_verified':True,'boot_id_valid':True,'target':'/boot','hardware_tested':False,'independent_final_artifact_review_required_before_staging':True,'description':'LOS23.2 recovery with its own kernel and DTs, AT&T diagnostic fixes, early bounded logs and adb-only startup. No system or userdata installation.'}
+ for path,blob in zip(paths,[signed,(json.dumps(validation,indent=2)+'\n').encode(),(json.dumps(info,indent=2)+'\n').encode()]):
+  with path.open('xb') as f:f.write(blob)
+ print(json.dumps({k:v for k,v in validation.items() if k!='kernel_transfer'},indent=2))
+if __name__=='__main__':main()

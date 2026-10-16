@@ -1,0 +1,42 @@
+#!/usr/bin/env python3
+"""Local Test23 image: restore only the exact published USB port HAL init RC."""
+from pathlib import Path
+import base64,hashlib,json,os,subprocess
+from assemble_test20_system import dbg,file_sha,FSCK
+from prepare_test23_usb_port_service import TARGET,NATIVE,NATIVE_SHA,SOURCE_SHA,OUTPUT_SHA,IMAGE_SHA,transform
+ROOT=Path(__file__).resolve().parent
+sha=lambda b:hashlib.sha256(b).hexdigest()
+def main():
+ os.umask(0o077)
+ source=ROOT/'test22-system-v1/system.img';assert source.stat().st_size==6979321856 and file_sha(source)==IMAGE_SHA
+ original=dbg(source,'cat '+TARGET);replacement=transform(original)
+ payload=ROOT/'prepared/test23-usb-port-service-v1';assert replacement==(payload/'android.hardware.usb@1.0-service.rc').read_bytes()
+ stat=dbg(source,'stat '+TARGET);assert stat==(payload/'source-inode-stat.txt').read_bytes()
+ assert b'Type: regular' in stat and b'Links: 1 ' in stat and b'Flags: 0x80000' in stat
+ block=dbg(source,'bmap '+TARGET+' 0').strip();assert block.isdigit() and int(block)>0
+ offset=int(block)*4096
+ with source.open('rb')as f:f.seek(offset);old=f.read(4096)
+ assert old[:175]==original
+ new=replacement+old[175:];assert len(new)==4096
+ out=ROOT/'test23-system-v1';out.mkdir(mode=0o700,exist_ok=False);image=out/'system.img'
+ subprocess.run(['/bin/cp','-c',str(source),str(image)],check=True)
+ with image.open('r+b')as f:
+  f.seek(offset);assert f.read(4096)==old;f.seek(offset);f.write(new);f.flush();os.fsync(f.fileno())
+ with source.open('rb')as a,image.open('rb')as b:
+  cursor=0
+  while cursor<source.stat().st_size:
+   size=min(4194304,source.stat().st_size-cursor);x=a.read(size);y=b.read(size)
+   if cursor<=offset<cursor+size:
+    at=offset-cursor;assert x[:at]==y[:at] and x[at:at+4096]==old and y[at:at+4096]==new and x[at+4096:]==y[at+4096:]
+   else:assert x==y
+   cursor+=size
+ assert dbg(image,'cat '+TARGET)==replacement and dbg(image,'stat '+TARGET)==stat
+ assert sha(dbg(image,'cat '+NATIVE))==NATIVE_SHA
+ check=subprocess.run([FSCK,'-fn',str(image)],capture_output=True);(out/'e2fsck-read-only.txt').write_bytes(check.stdout+check.stderr);assert check.returncode==0
+ assert file_sha(source)==IMAGE_SHA
+ target_sha=file_sha(image)
+ manifest={'passed':True,'bytes':image.stat().st_size,'source_sha256':IMAGE_SHA,'image_sha256':target_sha,'path':TARGET,'source_file_sha256':SOURCE_SHA,'target_file_sha256':OUTPUT_SHA,'offset':offset,'block_size':4096,'changed_file_bytes':89,'all_other_image_bytes_exact':True,'inode_metadata_and_xattrs_unchanged':True,'inode_metadata_sha256':sha(stat),'read_only_fsck_passed':True,'native_hal_unchanged_sha256':NATIVE_SHA,'phone_operations':False,'hardware_tested':False,'logging_runtime_names':'test22 unchanged; existing cache archive is previous boot; use fresh RAM/live capture'}
+ (out/'manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')
+ delta={'bytes':image.stat().st_size,'source_sha256':IMAGE_SHA,'image_sha256':target_sha,'blocks':[{'offset':offset,'original_sha256':sha(old),'sha256':sha(new),'data_base64':base64.b64encode(new).decode()}]}
+ (ROOT/'test23-system-delta.json').write_text(json.dumps(delta,indent=2)+'\n');print(json.dumps(manifest),flush=True)
+if __name__=='__main__':main()

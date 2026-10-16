@@ -1,0 +1,2267 @@
+{
+  "schema": 1,
+  "description": "Historical source and preparation-time metadata; sanitized references, not executable installation gates. Later runtime outcomes are in docs/ATT_PORT_STATUS.md and AGENTS.md.",
+  "excluded": [
+    "firmware/ROM/recovery/programmer binaries",
+    "signing and SSH keys",
+    "raw device logs, personal data, partition backups",
+    "base64 system-block delta manifests",
+    "upstream extracted source/binary trees"
+  ],
+  "entries": [
+    {
+      "source": "adb_boot_usb_control.py",
+      "public_path": "source/adb_boot_usb_control.py.txt",
+      "kind": "python",
+      "source_sha256": "4ea10347ffe127b0ab9dbce2428986ab31b598a673abd3dc4b4234bbd8b315ae",
+      "published_sha256": "4ea10347ffe127b0ab9dbce2428986ab31b598a673abd3dc4b4234bbd8b315ae",
+      "published_bytes": 14659,
+      "transformations": []
+    },
+    {
+      "source": "adb_recovery_control.py",
+      "public_path": "source/adb_recovery_control.py.txt",
+      "kind": "python",
+      "source_sha256": "51faf33fe6df0b24ade644bf5c23c6131811ebe9bb077ce39f2d20142fac41ee",
+      "published_sha256": "51faf33fe6df0b24ade644bf5c23c6131811ebe9bb077ce39f2d20142fac41ee",
+      "published_bytes": 21552,
+      "transformations": []
+    },
+    {
+      "source": "adb_test07_control.py",
+      "public_path": "source/adb_test07_control.py.txt",
+      "kind": "python",
+      "source_sha256": "506f227008f637a64456822dacb8985c82abea1033844637fe3da237a3044085",
+      "published_sha256": "506f227008f637a64456822dacb8985c82abea1033844637fe3da237a3044085",
+      "published_bytes": 6550,
+      "transformations": []
+    },
+    {
+      "source": "adb_test07_green_control.py",
+      "public_path": "source/adb_test07_green_control.py.txt",
+      "kind": "python",
+      "source_sha256": "10a05cfd98066c6f13998f08482947dcd63fdc9919fddd8538f2326dd13cf846",
+      "published_sha256": "10a05cfd98066c6f13998f08482947dcd63fdc9919fddd8538f2326dd13cf846",
+      "published_bytes": 6551,
+      "transformations": []
+    },
+    {
+      "source": "assemble_test20_boot.py",
+      "public_path": "source/assemble_test20_boot.py.txt",
+      "kind": "python",
+      "source_sha256": "2b4375ba63d561455ea483853e7c1efce099a170f8c1dbb81df968ea57bb491a",
+      "published_sha256": "2b4375ba63d561455ea483853e7c1efce099a170f8c1dbb81df968ea57bb491a",
+      "published_bytes": 4763,
+      "transformations": []
+    },
+    {
+      "source": "assemble_test20_system.py",
+      "public_path": "source/assemble_test20_system.py.txt",
+      "kind": "python",
+      "source_sha256": "839d96744f01e6f302b64bd3601c95a4a352207ac30c449ff7792cee3b97f953",
+      "published_sha256": "839d96744f01e6f302b64bd3601c95a4a352207ac30c449ff7792cee3b97f953",
+      "published_bytes": 7344,
+      "transformations": []
+    },
+    {
+      "source": "assemble_test22_system.py",
+      "public_path": "source/assemble_test22_system.py.txt",
+      "kind": "python",
+      "source_sha256": "9bbe9bcbb6f65645fea38d6145dc85da372780a5440e14d240dec24bfe4fba4a",
+      "published_sha256": "9bbe9bcbb6f65645fea38d6145dc85da372780a5440e14d240dec24bfe4fba4a",
+      "published_bytes": 8944,
+      "transformations": []
+    },
+    {
+      "source": "assemble_test23_system.py",
+      "public_path": "source/assemble_test23_system.py.txt",
+      "kind": "python",
+      "source_sha256": "2e3babd98e129a2845fcbe0fd5b7a29a423a4c5e6ba2e08c2b66b1694f72e123",
+      "published_sha256": "2e3babd98e129a2845fcbe0fd5b7a29a423a4c5e6ba2e08c2b66b1694f72e123",
+      "published_bytes": 3215,
+      "transformations": []
+    },
+    {
+      "source": "audit_test19_los_recovery.py",
+      "public_path": "source/audit_test19_los_recovery.py.txt",
+      "kind": "python",
+      "source_sha256": "2ab7d5c2c5b33be70118b3819bc1f41fa7dbff41ff915038eeb50688a4fa3161",
+      "published_sha256": "2ab7d5c2c5b33be70118b3819bc1f41fa7dbff41ff915038eeb50688a4fa3161",
+      "published_bytes": 10475,
+      "transformations": []
+    },
+    {
+      "source": "audit_test20_before_adb.py",
+      "public_path": "source/audit_test20_before_adb.py.txt",
+      "kind": "python",
+      "source_sha256": "4b7a4e3aee6f4b480b0e4c44736495c96f8dd739b2b42946c3a74afe2260070b",
+      "published_sha256": "4b7a4e3aee6f4b480b0e4c44736495c96f8dd739b2b42946c3a74afe2260070b",
+      "published_bytes": 4012,
+      "transformations": []
+    },
+    {
+      "source": "audit_test22_before.py",
+      "public_path": "source/audit_test22_before.py.txt",
+      "kind": "python",
+      "source_sha256": "db929e1dd2d533e277e1b491ffba19fc51aaba40a4affc90237ad64affbab445",
+      "published_sha256": "db929e1dd2d533e277e1b491ffba19fc51aaba40a4affc90237ad64affbab445",
+      "published_bytes": 799,
+      "transformations": []
+    },
+    {
+      "source": "audit_test23_before.py",
+      "public_path": "source/audit_test23_before.py.txt",
+      "kind": "python",
+      "source_sha256": "7adad68439884cc3a5c801bb6c0348af6e926ffca43ce891b4a4948cbf1bc152",
+      "published_sha256": "7adad68439884cc3a5c801bb6c0348af6e926ffca43ce891b4a4948cbf1bc152",
+      "published_bytes": 828,
+      "transformations": []
+    },
+    {
+      "source": "backup_android_aux_adb.py",
+      "public_path": "source/backup_android_aux_adb.py.txt",
+      "kind": "python",
+      "source_sha256": "bfe9734bb68ae7526d028b318f7a0b58c9b34debf65887a8bd3bf1c14c41044f",
+      "published_sha256": "bfe9734bb68ae7526d028b318f7a0b58c9b34debf65887a8bd3bf1c14c41044f",
+      "published_bytes": 3084,
+      "transformations": []
+    },
+    {
+      "source": "backup_session.py",
+      "public_path": "source/backup_session.py.txt",
+      "kind": "python",
+      "source_sha256": "b5e4150585d29eca30ca8a7683ba885d15e05511e41f4dbb721fd07356ec8cbe",
+      "published_sha256": "b5e4150585d29eca30ca8a7683ba885d15e05511e41f4dbb721fd07356ec8cbe",
+      "published_bytes": 3390,
+      "transformations": []
+    },
+    {
+      "source": "backup_stock_system_adb.py",
+      "public_path": "source/backup_stock_system_adb.py.txt",
+      "kind": "python",
+      "source_sha256": "74f148c6f66112ba38f93951f9fb1a055d58f25ad43af9d62d584aaa5c0e63c7",
+      "published_sha256": "74f148c6f66112ba38f93951f9fb1a055d58f25ad43af9d62d584aaa5c0e63c7",
+      "published_bytes": 3233,
+      "transformations": []
+    },
+    {
+      "source": "backup_test16_cache.py",
+      "public_path": "source/backup_test16_cache.py.txt",
+      "kind": "python",
+      "source_sha256": "e9457bbd07ade174e86d8e74b6d5d5629e6cecf4d91bed2d7d5f6c5bbd8f06b7",
+      "published_sha256": "e9457bbd07ade174e86d8e74b6d5d5629e6cecf4d91bed2d7d5f6c5bbd8f06b7",
+      "published_bytes": 2841,
+      "transformations": []
+    },
+    {
+      "source": "backup_test16_cache_after.py",
+      "public_path": "source/backup_test16_cache_after.py.txt",
+      "kind": "python",
+      "source_sha256": "df63658d8ebe0b6d9b496d04f939a47d9898374151b6519e271e334a541ba4b1",
+      "published_sha256": "df63658d8ebe0b6d9b496d04f939a47d9898374151b6519e271e334a541ba4b1",
+      "published_bytes": 2830,
+      "transformations": []
+    },
+    {
+      "source": "backup_test17_cache_after.py",
+      "public_path": "source/backup_test17_cache_after.py.txt",
+      "kind": "python",
+      "source_sha256": "16e977b5a50636da4057685a36abadcf037f11f9221737be139dbce71e4459c2",
+      "published_sha256": "16e977b5a50636da4057685a36abadcf037f11f9221737be139dbce71e4459c2",
+      "published_bytes": 2830,
+      "transformations": []
+    },
+    {
+      "source": "backup_test19_cache_after.py",
+      "public_path": "source/backup_test19_cache_after.py.txt",
+      "kind": "python",
+      "source_sha256": "d88e533c1f5db93afc9f8762d910f3ee555881bf002ea12d8b86d5318b595794",
+      "published_sha256": "d88e533c1f5db93afc9f8762d910f3ee555881bf002ea12d8b86d5318b595794",
+      "published_bytes": 2830,
+      "transformations": []
+    },
+    {
+      "source": "capture_system_gpu.py",
+      "public_path": "source/capture_system_gpu.py.txt",
+      "kind": "python",
+      "source_sha256": "186b4469705424b9b7a58959242397037acce2b0449cb6acda50b6c6aae0f701",
+      "published_sha256": "b19522f8d54f1b4543567567947f77a5750b952fa7417f27a06b942ac728eb35",
+      "published_bytes": 1429,
+      "transformations": [
+        {
+          "kind": "local_path_or_session_placeholder",
+          "count": 2
+        },
+        {
+          "kind": "local_path_or_session_placeholder",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "source": "capture_test06_baseline.py",
+      "public_path": "source/capture_test06_baseline.py.txt",
+      "kind": "python",
+      "source_sha256": "f67fb7820e9e59ab0f9affcbde46211e28bd8062fafa29f1a1f5a24a7e368652",
+      "published_sha256": "d40e4455be7aeb866a2389466a9e12037aa4c24ba8c71cc9a0864ad4bba6e01d",
+      "published_bytes": 2628,
+      "transformations": [
+        {
+          "kind": "local_path_or_session_placeholder",
+          "count": 2
+        },
+        {
+          "kind": "local_path_or_session_placeholder",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "source": "capture_test13_adb.py",
+      "public_path": "source/capture_test13_adb.py.txt",
+      "kind": "python",
+      "source_sha256": "de008f14e9073f16d6f28cb2c98f9eb19dbd9b1105c69726033cceb8532cba6c",
+      "published_sha256": "de008f14e9073f16d6f28cb2c98f9eb19dbd9b1105c69726033cceb8532cba6c",
+      "published_bytes": 2043,
+      "transformations": []
+    },
+    {
+      "source": "capture_test14_adb.py",
+      "public_path": "source/capture_test14_adb.py.txt",
+      "kind": "python",
+      "source_sha256": "696ce8d644c54142b39f42be1bbb067f1c0c0cb8cbb89b9e3073cb9cb211f429",
+      "published_sha256": "696ce8d644c54142b39f42be1bbb067f1c0c0cb8cbb89b9e3073cb9cb211f429",
+      "published_bytes": 2036,
+      "transformations": []
+    },
+    {
+      "source": "capture_test15_adb.py",
+      "public_path": "source/capture_test15_adb.py.txt",
+      "kind": "python",
+      "source_sha256": "3ee44dda73bd47f1a7c70b890bbe86a063e0b9808497d3557343b256394e5296",
+      "published_sha256": "3ee44dda73bd47f1a7c70b890bbe86a063e0b9808497d3557343b256394e5296",
+      "published_bytes": 2038,
+      "transformations": []
+    },
+    {
+      "source": "capture_test16_adb.py",
+      "public_path": "source/capture_test16_adb.py.txt",
+      "kind": "python",
+      "source_sha256": "5eb1947b08ec4dbcb18e5886a8f76051b4134bfb991456c6a188e053cacd1eae",
+      "published_sha256": "5eb1947b08ec4dbcb18e5886a8f76051b4134bfb991456c6a188e053cacd1eae",
+      "published_bytes": 2033,
+      "transformations": []
+    },
+    {
+      "source": "capture_test17_adb.py",
+      "public_path": "source/capture_test17_adb.py.txt",
+      "kind": "python",
+      "source_sha256": "1aa64bdcb3e9fe30a82ab902627a87217268b4484d25729f944ffa42d2af9ac1",
+      "published_sha256": "1aa64bdcb3e9fe30a82ab902627a87217268b4484d25729f944ffa42d2af9ac1",
+      "published_bytes": 2033,
+      "transformations": []
+    },
+    {
+      "source": "capture_test17_adb_v2.py",
+      "public_path": "source/capture_test17_adb_v2.py.txt",
+      "kind": "python",
+      "source_sha256": "29795c9751270992323d83517533b5ed44f83faf4cfec1c1c909146ea11b2713",
+      "published_sha256": "29795c9751270992323d83517533b5ed44f83faf4cfec1c1c909146ea11b2713",
+      "published_bytes": 2375,
+      "transformations": []
+    },
+    {
+      "source": "capture_test17_display.py",
+      "public_path": "source/capture_test17_display.py.txt",
+      "kind": "python",
+      "source_sha256": "c78d766d598185319d55cf62228ad12b359fc0dc1725c38808c047e5c2660da2",
+      "published_sha256": "c78d766d598185319d55cf62228ad12b359fc0dc1725c38808c047e5c2660da2",
+      "published_bytes": 2098,
+      "transformations": []
+    },
+    {
+      "source": "capture_test18_adb.py",
+      "public_path": "source/capture_test18_adb.py.txt",
+      "kind": "python",
+      "source_sha256": "4809c040d282cfa740c63ae312f36cb5673402dee3de666fa96c613bde0f7d2d",
+      "published_sha256": "4809c040d282cfa740c63ae312f36cb5673402dee3de666fa96c613bde0f7d2d",
+      "published_bytes": 2370,
+      "transformations": []
+    },
+    {
+      "source": "capture_test19_adb.py",
+      "public_path": "source/capture_test19_adb.py.txt",
+      "kind": "python",
+      "source_sha256": "db9764d8ca9ea1347fcd762778ea1c4f2bceb26e6c346f5eb5591507f92f8213",
+      "published_sha256": "db9764d8ca9ea1347fcd762778ea1c4f2bceb26e6c346f5eb5591507f92f8213",
+      "published_bytes": 2479,
+      "transformations": []
+    },
+    {
+      "source": "capture_test20_adb.py",
+      "public_path": "source/capture_test20_adb.py.txt",
+      "kind": "python",
+      "source_sha256": "e64ce5b709600dcd1c27e0d9338e83d5a4bc72098bf021dc1579b5e6032eb752",
+      "published_sha256": "e64ce5b709600dcd1c27e0d9338e83d5a4bc72098bf021dc1579b5e6032eb752",
+      "published_bytes": 14922,
+      "transformations": []
+    },
+    {
+      "source": "capture_test22_adb.py",
+      "public_path": "source/capture_test22_adb.py.txt",
+      "kind": "python",
+      "source_sha256": "9c89fc1ea65e3040cff4ee16758b20b3733c6ec2df2950b73e39700776b57254",
+      "published_sha256": "9c89fc1ea65e3040cff4ee16758b20b3733c6ec2df2950b73e39700776b57254",
+      "published_bytes": 14922,
+      "transformations": []
+    },
+    {
+      "source": "capture_test22_android_supplement.py",
+      "public_path": "source/capture_test22_android_supplement.py.txt",
+      "kind": "python",
+      "source_sha256": "89605ae583340739810a98711720ec66195bb466bf63c68395553d3c4e04bc19",
+      "published_sha256": "89605ae583340739810a98711720ec66195bb466bf63c68395553d3c4e04bc19",
+      "published_bytes": 8705,
+      "transformations": []
+    },
+    {
+      "source": "capture_test22_black_screen.py",
+      "public_path": "source/capture_test22_black_screen.py.txt",
+      "kind": "python",
+      "source_sha256": "92b87caa1df0e36877635d94f64a2a95110007ec63eceed4b1050528b11099a0",
+      "published_sha256": "92b87caa1df0e36877635d94f64a2a95110007ec63eceed4b1050528b11099a0",
+      "published_bytes": 1640,
+      "transformations": []
+    },
+    {
+      "source": "capture_test22_black_screen_v2.py",
+      "public_path": "source/capture_test22_black_screen_v2.py.txt",
+      "kind": "python",
+      "source_sha256": "fad6f9570ce2c448662e2425317488ebdbc9ba5eb1c51e535a2be50fa195c31e",
+      "published_sha256": "fad6f9570ce2c448662e2425317488ebdbc9ba5eb1c51e535a2be50fa195c31e",
+      "published_bytes": 1604,
+      "transformations": []
+    },
+    {
+      "source": "capture_test22_black_stacks.py",
+      "public_path": "source/capture_test22_black_stacks.py.txt",
+      "kind": "python",
+      "source_sha256": "64582950a2c0f668095a022697e51ce2799bbc610e7a6d4e420bdbc18fc7318b",
+      "published_sha256": "64582950a2c0f668095a022697e51ce2799bbc610e7a6d4e420bdbc18fc7318b",
+      "published_bytes": 1159,
+      "transformations": []
+    },
+    {
+      "source": "capture_test22_recovery_bcb.py",
+      "public_path": "source/capture_test22_recovery_bcb.py.txt",
+      "kind": "python",
+      "source_sha256": "d082523b202a4c7dbcc28c52b5bc55f8e6f823e429a28a66eab141a02aa976ca",
+      "published_sha256": "d082523b202a4c7dbcc28c52b5bc55f8e6f823e429a28a66eab141a02aa976ca",
+      "published_bytes": 15043,
+      "transformations": []
+    },
+    {
+      "source": "capture_test22_recovery_bcb_v2.py",
+      "public_path": "source/capture_test22_recovery_bcb_v2.py.txt",
+      "kind": "python",
+      "source_sha256": "86e948c59bb98aa8e8375c32db55cd617a4a44dc1f10c5bd977231522520df13",
+      "published_sha256": "86e948c59bb98aa8e8375c32db55cd617a4a44dc1f10c5bd977231522520df13",
+      "published_bytes": 15475,
+      "transformations": []
+    },
+    {
+      "source": "capture_test22_recovery_bcb_v3.py",
+      "public_path": "source/capture_test22_recovery_bcb_v3.py.txt",
+      "kind": "python",
+      "source_sha256": "25d7d90d6e553b9cfd439693d50f6bef52b950de89c591166682e61c0acce17c",
+      "published_sha256": "25d7d90d6e553b9cfd439693d50f6bef52b950de89c591166682e61c0acce17c",
+      "published_bytes": 15579,
+      "transformations": []
+    },
+    {
+      "source": "capture_test23_android_supplement.py",
+      "public_path": "source/capture_test23_android_supplement.py.txt",
+      "kind": "python",
+      "source_sha256": "b0d67ee734cccd26e9a16a88aa0fc8462c461ad70edcb88acdd6a2d5c24c7072",
+      "published_sha256": "b0d67ee734cccd26e9a16a88aa0fc8462c461ad70edcb88acdd6a2d5c24c7072",
+      "published_bytes": 13798,
+      "transformations": []
+    },
+    {
+      "source": "capture_test23_display_modes.py",
+      "public_path": "source/capture_test23_display_modes.py.txt",
+      "kind": "python",
+      "source_sha256": "e41f96a1ff19f618ab9ae67598b80657b513dd640222f506d5ee48c9b01c6343",
+      "published_sha256": "e41f96a1ff19f618ab9ae67598b80657b513dd640222f506d5ee48c9b01c6343",
+      "published_bytes": 1761,
+      "transformations": []
+    },
+    {
+      "source": "capture_test23_usb_before.py",
+      "public_path": "source/capture_test23_usb_before.py.txt",
+      "kind": "python",
+      "source_sha256": "753f343102d85356710f2c08be8e5f45e4642de586ac8316512fa5189647e75b",
+      "published_sha256": "753f343102d85356710f2c08be8e5f45e4642de586ac8316512fa5189647e75b",
+      "published_bytes": 1384,
+      "transformations": []
+    },
+    {
+      "source": "check_install_test20_adb_offline.py",
+      "public_path": "source/check_install_test20_adb_offline.py.txt",
+      "kind": "python",
+      "source_sha256": "8066e2af448203d39f9e4da080ffe6d0073e4359d521bde56135bff43e98a8ab",
+      "published_sha256": "8066e2af448203d39f9e4da080ffe6d0073e4359d521bde56135bff43e98a8ab",
+      "published_bytes": 5037,
+      "transformations": []
+    },
+    {
+      "source": "check_los23_full_usb.py",
+      "public_path": "source/check_los23_full_usb.py.txt",
+      "kind": "python",
+      "source_sha256": "0edfdec26226ece1e9e364366819493928636ce3aabaeb4f7a0c91d1dc63e400",
+      "published_sha256": "0edfdec26226ece1e9e364366819493928636ce3aabaeb4f7a0c91d1dc63e400",
+      "published_bytes": 5844,
+      "transformations": []
+    },
+    {
+      "source": "clear_test14_bcb.py",
+      "public_path": "source/clear_test14_bcb.py.txt",
+      "kind": "python",
+      "source_sha256": "795f8fa85ad414d62d2f6eae96703b77b9a63d93e44958ec67caac45f7e8a818",
+      "published_sha256": "795f8fa85ad414d62d2f6eae96703b77b9a63d93e44958ec67caac45f7e8a818",
+      "published_bytes": 2509,
+      "transformations": []
+    },
+    {
+      "source": "clear_test15_bcb.py",
+      "public_path": "source/clear_test15_bcb.py.txt",
+      "kind": "python",
+      "source_sha256": "699ce706e1f92088d58b3e492b1ef998ca152bb3049a2ecb4ad185336563fba6",
+      "published_sha256": "699ce706e1f92088d58b3e492b1ef998ca152bb3049a2ecb4ad185336563fba6",
+      "published_bytes": 2511,
+      "transformations": []
+    },
+    {
+      "source": "clear_test16_bcb.py",
+      "public_path": "source/clear_test16_bcb.py.txt",
+      "kind": "python",
+      "source_sha256": "5ab8a152bd13c670af399b058823d8beed09d1ae398a1dad77ac7a6b30bdf14e",
+      "published_sha256": "5ab8a152bd13c670af399b058823d8beed09d1ae398a1dad77ac7a6b30bdf14e",
+      "published_bytes": 2506,
+      "transformations": []
+    },
+    {
+      "source": "clear_test17_bcb.py",
+      "public_path": "source/clear_test17_bcb.py.txt",
+      "kind": "python",
+      "source_sha256": "da09ad20afb14d6dabea0e7018d2a8c3d1ed9cd824a684c93f4391f7fdd37004",
+      "published_sha256": "da09ad20afb14d6dabea0e7018d2a8c3d1ed9cd824a684c93f4391f7fdd37004",
+      "published_bytes": 2506,
+      "transformations": []
+    },
+    {
+      "source": "clear_test18_bcb.py",
+      "public_path": "source/clear_test18_bcb.py.txt",
+      "kind": "python",
+      "source_sha256": "4f623b31f4b46d860e8445623b7d22bcaae9f32edb08b54c99bdc8d9ebd548cb",
+      "published_sha256": "4f623b31f4b46d860e8445623b7d22bcaae9f32edb08b54c99bdc8d9ebd548cb",
+      "published_bytes": 2501,
+      "transformations": []
+    },
+    {
+      "source": "clear_test19_bcb.py",
+      "public_path": "source/clear_test19_bcb.py.txt",
+      "kind": "python",
+      "source_sha256": "9169db3a0fc8a2a423b470997ee59dab10d456f6e610ff87a9a31cb261e8b7bc",
+      "published_sha256": "9169db3a0fc8a2a423b470997ee59dab10d456f6e610ff87a9a31cb261e8b7bc",
+      "published_bytes": 2506,
+      "transformations": []
+    },
+    {
+      "source": "disassemble_slice.py",
+      "public_path": "source/disassemble_slice.py.txt",
+      "kind": "python",
+      "source_sha256": "a7f87fbdb88ce25fffefa66d5485e5d7ad6b2c63751364275c6d2c11ee98ad6b",
+      "published_sha256": "a7f87fbdb88ce25fffefa66d5485e5d7ad6b2c63751364275c6d2c11ee98ad6b",
+      "published_bytes": 919,
+      "transformations": []
+    },
+    {
+      "source": "edl_full_audit.py",
+      "public_path": "source/edl_full_audit.py.txt",
+      "kind": "python",
+      "source_sha256": "42056089aef91360153ac80cb7a0ddd8dbe684573a0d58548b9781b752d74a2b",
+      "published_sha256": "42056089aef91360153ac80cb7a0ddd8dbe684573a0d58548b9781b752d74a2b",
+      "published_bytes": 2688,
+      "transformations": []
+    },
+    {
+      "source": "extract_cache_diagnostics.py",
+      "public_path": "source/extract_cache_diagnostics.py.txt",
+      "kind": "python",
+      "source_sha256": "1bd2900ec564e356950c2e815b51965382dd99b5a1d5e8e611089a55eff479a0",
+      "published_sha256": "1bd2900ec564e356950c2e815b51965382dd99b5a1d5e8e611089a55eff479a0",
+      "published_bytes": 3110,
+      "transformations": []
+    },
+    {
+      "source": "extract_los23_system.py",
+      "public_path": "source/extract_los23_system.py.txt",
+      "kind": "python",
+      "source_sha256": "ff418c9f005cbdb9f32f04ea4150f350fdba8d2e798810cff304f7b302bd2f9f",
+      "published_sha256": "ff418c9f005cbdb9f32f04ea4150f350fdba8d2e798810cff304f7b302bd2f9f",
+      "published_bytes": 4444,
+      "transformations": []
+    },
+    {
+      "source": "extract_test17_cache_diagnostics.py",
+      "public_path": "source/extract_test17_cache_diagnostics.py.txt",
+      "kind": "python",
+      "source_sha256": "dd0111136ad42df87c0b7b69409f102c84d9310d5105d71bf49516e9629ea37b",
+      "published_sha256": "dd0111136ad42df87c0b7b69409f102c84d9310d5105d71bf49516e9629ea37b",
+      "published_bytes": 3110,
+      "transformations": []
+    },
+    {
+      "source": "extract_test19_cache_diagnostics.py",
+      "public_path": "source/extract_test19_cache_diagnostics.py.txt",
+      "kind": "python",
+      "source_sha256": "56ce5f5753c73bae55e3b929de0a5b7fe1bb475a84763bf9beb319ba5daaa12d",
+      "published_sha256": "56ce5f5753c73bae55e3b929de0a5b7fe1bb475a84763bf9beb319ba5daaa12d",
+      "published_bytes": 3110,
+      "transformations": []
+    },
+    {
+      "source": "firehose_boot_test.py",
+      "public_path": "source/firehose_boot_test.py.txt",
+      "kind": "python",
+      "source_sha256": "03d1c3ec6f88fc0c0f08cf2c8e51f8711e06a00730694c2f7cba9390b19161ce",
+      "published_sha256": "03d1c3ec6f88fc0c0f08cf2c8e51f8711e06a00730694c2f7cba9390b19161ce",
+      "published_bytes": 8892,
+      "transformations": []
+    },
+    {
+      "source": "firehose_read.py",
+      "public_path": "source/firehose_read.py.txt",
+      "kind": "python",
+      "source_sha256": "55e800e74e2cafc091ffe4d40d6fabb3b3cce1f49f45b60f38c9629a7342b34c",
+      "published_sha256": "55e800e74e2cafc091ffe4d40d6fabb3b3cce1f49f45b60f38c9629a7342b34c",
+      "published_bytes": 8175,
+      "transformations": []
+    },
+    {
+      "source": "install_test20_adb.py",
+      "public_path": "source/install_test20_adb.py.txt",
+      "kind": "python",
+      "source_sha256": "c6ad97577eeb0b8e7d090e603132bbed97c3ee30376ee58ea1733d5e014de7ec",
+      "published_sha256": "c6ad97577eeb0b8e7d090e603132bbed97c3ee30376ee58ea1733d5e014de7ec",
+      "published_bytes": 13054,
+      "transformations": []
+    },
+    {
+      "source": "monitor_test22_usb.py",
+      "public_path": "source/monitor_test22_usb.py.txt",
+      "kind": "python",
+      "source_sha256": "67dae84ade8c6e049368d1de1eee92639aa82cfba52888061f58c980716bf63c",
+      "published_sha256": "67dae84ade8c6e049368d1de1eee92639aa82cfba52888061f58c980716bf63c",
+      "published_bytes": 713,
+      "transformations": []
+    },
+    {
+      "source": "observe_test14_late.py",
+      "public_path": "source/observe_test14_late.py.txt",
+      "kind": "python",
+      "source_sha256": "53c081089f9e1cc0535c4aebe7a7c165b36c7c9ce1c55ea7b6e833c4fa8aed3f",
+      "published_sha256": "c17584696ebabe1bd50cbcb3f3481b1edcf1a9144ac3d94065a96d6b62c9423e",
+      "published_bytes": 1428,
+      "transformations": [
+        {
+          "kind": "local_path_or_session_placeholder",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "source": "prepare_adb_only_candidates.py",
+      "public_path": "source/prepare_adb_only_candidates.py.txt",
+      "kind": "python",
+      "source_sha256": "f6715516c34eb0671de450c51f75c6dab38ae977b2d5e1ef621b37ce93643474",
+      "published_sha256": "f6715516c34eb0671de450c51f75c6dab38ae977b2d5e1ef621b37ce93643474",
+      "published_bytes": 4570,
+      "transformations": []
+    },
+    {
+      "source": "prepare_logged_recovery_baseline.py",
+      "public_path": "source/prepare_logged_recovery_baseline.py.txt",
+      "kind": "python",
+      "source_sha256": "b691cc644562a79b320686e9ade30b5bdb005a9a18001a90d3b1720309d69dbf",
+      "published_sha256": "b691cc644562a79b320686e9ade30b5bdb005a9a18001a90d3b1720309d69dbf",
+      "published_bytes": 9961,
+      "transformations": []
+    },
+    {
+      "source": "prepare_los23_att_gpu.py",
+      "public_path": "source/prepare_los23_att_gpu.py.txt",
+      "kind": "python",
+      "source_sha256": "abe5cfae16dd23932cc357fc4bf6bbb53013815d7d45121c0eb4c4b7eb4551dd",
+      "published_sha256": "abe5cfae16dd23932cc357fc4bf6bbb53013815d7d45121c0eb4c4b7eb4551dd",
+      "published_bytes": 4270,
+      "transformations": []
+    },
+    {
+      "source": "prepare_los23_full_boot_kernel.py",
+      "public_path": "source/prepare_los23_full_boot_kernel.py.txt",
+      "kind": "python",
+      "source_sha256": "0ac7b2fb607053b690c956791633297b2265c653e0bf2db93a983e5f014f49d3",
+      "published_sha256": "0ac7b2fb607053b690c956791633297b2265c653e0bf2db93a983e5f014f49d3",
+      "published_bytes": 11331,
+      "transformations": []
+    },
+    {
+      "source": "prepare_los23_full_security.py",
+      "public_path": "source/prepare_los23_full_security.py.txt",
+      "kind": "python",
+      "source_sha256": "e708a136f3c7c74b433515d914d9d0bff8a111a6e75b4d8b71c69d6db0b8b382",
+      "published_sha256": "e708a136f3c7c74b433515d914d9d0bff8a111a6e75b4d8b71c69d6db0b8b382",
+      "published_bytes": 8209,
+      "transformations": []
+    },
+    {
+      "source": "prepare_los23_full_usb.py",
+      "public_path": "source/prepare_los23_full_usb.py.txt",
+      "kind": "python",
+      "source_sha256": "9d3c433b11740def011d1b7b30fc33bf86b82f621132c98a418a1425e8499aa8",
+      "published_sha256": "9d3c433b11740def011d1b7b30fc33bf86b82f621132c98a418a1425e8499aa8",
+      "published_bytes": 16019,
+      "transformations": []
+    },
+    {
+      "source": "prepare_los23_recovery_kernel.py",
+      "public_path": "source/prepare_los23_recovery_kernel.py.txt",
+      "kind": "python",
+      "source_sha256": "3ac860116349e2fd006aff55b427145b3859476d5c1d1c03c06243634fb7d1f0",
+      "published_sha256": "3ac860116349e2fd006aff55b427145b3859476d5c1d1c03c06243634fb7d1f0",
+      "published_bytes": 13098,
+      "transformations": []
+    },
+    {
+      "source": "prepare_los23_recovery_ramdisk.py",
+      "public_path": "source/prepare_los23_recovery_ramdisk.py.txt",
+      "kind": "python",
+      "source_sha256": "aa45207ccd14de378eed47569eb1be8d6c92fc163f9e992689a047b6cebfdae2",
+      "published_sha256": "aa45207ccd14de378eed47569eb1be8d6c92fc163f9e992689a047b6cebfdae2",
+      "published_bytes": 15837,
+      "transformations": []
+    },
+    {
+      "source": "prepare_recovery_reader_control.py",
+      "public_path": "source/prepare_recovery_reader_control.py.txt",
+      "kind": "python",
+      "source_sha256": "dd95b94ea11d2b4aac7b1cd2e31510ca03fecdf3984be492659c751e965e3776",
+      "published_sha256": "dd95b94ea11d2b4aac7b1cd2e31510ca03fecdf3984be492659c751e965e3776",
+      "published_bytes": 6632,
+      "transformations": []
+    },
+    {
+      "source": "prepare_test03_qsee_probe.py",
+      "public_path": "source/prepare_test03_qsee_probe.py.txt",
+      "kind": "python",
+      "source_sha256": "5bf05ebb478224e59e3b8a36c8d034d11180c8532c5926ac73fb3dbd29095e2d",
+      "published_sha256": "5bf05ebb478224e59e3b8a36c8d034d11180c8532c5926ac73fb3dbd29095e2d",
+      "published_bytes": 4730,
+      "transformations": []
+    },
+    {
+      "source": "prepare_test04_led.py",
+      "public_path": "source/prepare_test04_led.py.txt",
+      "kind": "python",
+      "source_sha256": "206d7819b496525d01020b4354d9a71678020739c85857fbbfc87ee58cc42855",
+      "published_sha256": "206d7819b496525d01020b4354d9a71678020739c85857fbbfc87ee58cc42855",
+      "published_bytes": 4935,
+      "transformations": []
+    },
+    {
+      "source": "prepare_test05_qce_disabled.py",
+      "public_path": "source/prepare_test05_qce_disabled.py.txt",
+      "kind": "python",
+      "source_sha256": "6dda12e864addb3ab1aef880e6409940774ab2686fc01322c406ca74347c91bc",
+      "published_sha256": "6dda12e864addb3ab1aef880e6409940774ab2686fc01322c406ca74347c91bc",
+      "published_bytes": 4339,
+      "transformations": []
+    },
+    {
+      "source": "prepare_test07_early_led.py",
+      "public_path": "source/prepare_test07_early_led.py.txt",
+      "kind": "python",
+      "source_sha256": "bc809e2a19009e87818e9c72338484e39bc14688e6c4d97f4c99234438f4a2fe",
+      "published_sha256": "bc809e2a19009e87818e9c72338484e39bc14688e6c4d97f4c99234438f4a2fe",
+      "published_bytes": 11370,
+      "transformations": []
+    },
+    {
+      "source": "prepare_test07_green_led.py",
+      "public_path": "source/prepare_test07_green_led.py.txt",
+      "kind": "python",
+      "source_sha256": "8ab0a9d34c9a9106a444775ae2e58ac4b8a07cc5362507b0e38df57d449a5141",
+      "published_sha256": "8ab0a9d34c9a9106a444775ae2e58ac4b8a07cc5362507b0e38df57d449a5141",
+      "published_bytes": 6590,
+      "transformations": []
+    },
+    {
+      "source": "prepare_test08_mid_green.py",
+      "public_path": "source/prepare_test08_mid_green.py.txt",
+      "kind": "python",
+      "source_sha256": "6c11ab3eaeecc48093e34a152eb6f82f9d94551b47adcdc21d43753f145847eb",
+      "published_sha256": "6c11ab3eaeecc48093e34a152eb6f82f9d94551b47adcdc21d43753f145847eb",
+      "published_bytes": 6599,
+      "transformations": []
+    },
+    {
+      "source": "prepare_test09_end_level6.py",
+      "public_path": "source/prepare_test09_end_level6.py.txt",
+      "kind": "python",
+      "source_sha256": "7ad7194a9958613032f6d32ffca632b5b8007435f7b07a020469e0bd62095e94",
+      "published_sha256": "7ad7194a9958613032f6d32ffca632b5b8007435f7b07a020469e0bd62095e94",
+      "published_bytes": 6943,
+      "transformations": []
+    },
+    {
+      "source": "prepare_test10_after_deferred.py",
+      "public_path": "source/prepare_test10_after_deferred.py.txt",
+      "kind": "python",
+      "source_sha256": "09713426d826095a57eb5e95a0be40a64341f4da634d74b6bd8b7741da52f669",
+      "published_sha256": "09713426d826095a57eb5e95a0be40a64341f4da634d74b6bd8b7741da52f669",
+      "published_bytes": 7368,
+      "transformations": []
+    },
+    {
+      "source": "prepare_test11_deferred_pulse.py",
+      "public_path": "source/prepare_test11_deferred_pulse.py.txt",
+      "kind": "python",
+      "source_sha256": "cd194793786fdc565a4376d00f53e90a7b67375b4bd8fb2f811b3e8e1d1af47c",
+      "published_sha256": "cd194793786fdc565a4376d00f53e90a7b67375b4bd8fb2f811b3e8e1d1af47c",
+      "published_bytes": 8064,
+      "transformations": []
+    },
+    {
+      "source": "prepare_test11_deferred_pulse_v2.py",
+      "public_path": "source/prepare_test11_deferred_pulse_v2.py.txt",
+      "kind": "python",
+      "source_sha256": "0d7bfb8ecd1996473b5c013743423df8b790f152024a1e782975c39040bf81ef",
+      "published_sha256": "0d7bfb8ecd1996473b5c013743423df8b790f152024a1e782975c39040bf81ef",
+      "published_bytes": 8073,
+      "transformations": []
+    },
+    {
+      "source": "prepare_test11_deferred_pulse_v3.py",
+      "public_path": "source/prepare_test11_deferred_pulse_v3.py.txt",
+      "kind": "python",
+      "source_sha256": "e41759d5f43ef4a535276b9ba66bad561c49ff4281de9c2640a8fb9bc49304af",
+      "published_sha256": "e41759d5f43ef4a535276b9ba66bad561c49ff4281de9c2640a8fb9bc49304af",
+      "published_bytes": 8073,
+      "transformations": []
+    },
+    {
+      "source": "prepare_test12_preflush.py",
+      "public_path": "source/prepare_test12_preflush.py.txt",
+      "kind": "python",
+      "source_sha256": "58a8a5d17a8b99ecb00e2760686b3672b08a18a1dfb4b0df86878f09c8716c9c",
+      "published_sha256": "58a8a5d17a8b99ecb00e2760686b3672b08a18a1dfb4b0df86878f09c8716c9c",
+      "published_bytes": 4252,
+      "transformations": []
+    },
+    {
+      "source": "prepare_test13_observability.py",
+      "public_path": "source/prepare_test13_observability.py.txt",
+      "kind": "python",
+      "source_sha256": "4550f6f8aad03494fbf5588a44a0fcec7b3115be262bdebf4ebb97ad410618f9",
+      "published_sha256": "4550f6f8aad03494fbf5588a44a0fcec7b3115be262bdebf4ebb97ad410618f9",
+      "published_bytes": 8498,
+      "transformations": []
+    },
+    {
+      "source": "prepare_test14_pre_async.py",
+      "public_path": "source/prepare_test14_pre_async.py.txt",
+      "kind": "python",
+      "source_sha256": "38dc3ca9abd82b56f8910a07a74c612e6320df31b1f9fdbf2ee67b6a42a67491",
+      "published_sha256": "38dc3ca9abd82b56f8910a07a74c612e6320df31b1f9fdbf2ee67b6a42a67491",
+      "published_bytes": 6598,
+      "transformations": []
+    },
+    {
+      "source": "prepare_test15_after_async.py",
+      "public_path": "source/prepare_test15_after_async.py.txt",
+      "kind": "python",
+      "source_sha256": "89bb0c2a6b300598a40e5021e78efb73fb262e0852e85f24f9d517978466504f",
+      "published_sha256": "89bb0c2a6b300598a40e5021e78efb73fb262e0852e85f24f9d517978466504f",
+      "published_bytes": 6503,
+      "transformations": []
+    },
+    {
+      "source": "prepare_test16_plan.py",
+      "public_path": "source/prepare_test16_plan.py.txt",
+      "kind": "python",
+      "source_sha256": "1aedc5c44509ddc49da723ac26f423805a429f7ea82c28210131a85e9a5d4fd2",
+      "published_sha256": "1aedc5c44509ddc49da723ac26f423805a429f7ea82c28210131a85e9a5d4fd2",
+      "published_bytes": 3502,
+      "transformations": []
+    },
+    {
+      "source": "prepare_test16_runtime_logs.py",
+      "public_path": "source/prepare_test16_runtime_logs.py.txt",
+      "kind": "python",
+      "source_sha256": "768d385e2bbbf423d4cdb99ae4a5c3d6801020a986703995341f258e04df9a1c",
+      "published_sha256": "768d385e2bbbf423d4cdb99ae4a5c3d6801020a986703995341f258e04df9a1c",
+      "published_bytes": 3932,
+      "transformations": []
+    },
+    {
+      "source": "prepare_test17_early_runtime_logs.py",
+      "public_path": "source/prepare_test17_early_runtime_logs.py.txt",
+      "kind": "python",
+      "source_sha256": "ee362e63c283cb6c046c405612807196e23a74b43427149300c2288df3131f0a",
+      "published_sha256": "ee362e63c283cb6c046c405612807196e23a74b43427149300c2288df3131f0a",
+      "published_bytes": 15286,
+      "transformations": []
+    },
+    {
+      "source": "prepare_test17_usb_supplier.py",
+      "public_path": "source/prepare_test17_usb_supplier.py.txt",
+      "kind": "python",
+      "source_sha256": "85704f5ae796965b91c2ce093151ffca4557b7825237afe25e0c07456b89c873",
+      "published_sha256": "85704f5ae796965b91c2ce093151ffca4557b7825237afe25e0c07456b89c873",
+      "published_bytes": 7136,
+      "transformations": []
+    },
+    {
+      "source": "prepare_test18_cleanup.py",
+      "public_path": "source/prepare_test18_cleanup.py.txt",
+      "kind": "python",
+      "source_sha256": "55fc82d26ab405b834ed932bafea92293c775e2026282b5c6e8b8fc2e19aa4c6",
+      "published_sha256": "55fc82d26ab405b834ed932bafea92293c775e2026282b5c6e8b8fc2e19aa4c6",
+      "published_bytes": 11168,
+      "transformations": []
+    },
+    {
+      "source": "prepare_test18_harness.py",
+      "public_path": "source/prepare_test18_harness.py.txt",
+      "kind": "python",
+      "source_sha256": "f7987f9488666b21097593835f736830fa4a1cd30bed4cc9aef463380face1ff",
+      "published_sha256": "f7987f9488666b21097593835f736830fa4a1cd30bed4cc9aef463380face1ff",
+      "published_bytes": 3122,
+      "transformations": []
+    },
+    {
+      "source": "prepare_test19_los_recovery.py",
+      "public_path": "source/prepare_test19_los_recovery.py.txt",
+      "kind": "python",
+      "source_sha256": "d274b83cd7762dd61e0080606e82bbd4506fac16dc7843d4d8fb330391fe1544",
+      "published_sha256": "d274b83cd7762dd61e0080606e82bbd4506fac16dc7843d4d8fb330391fe1544",
+      "published_bytes": 3127,
+      "transformations": []
+    },
+    {
+      "source": "prepare_test20_logging.py",
+      "public_path": "source/prepare_test20_logging.py.txt",
+      "kind": "python",
+      "source_sha256": "2f4d3c4808524a4cceea240757ede08c5d6b17c52e44b1a8dcefae20ebdfa4f6",
+      "published_sha256": "2f4d3c4808524a4cceea240757ede08c5d6b17c52e44b1a8dcefae20ebdfa4f6",
+      "published_bytes": 4345,
+      "transformations": []
+    },
+    {
+      "source": "prepare_test21_gatekeeper_diagnostic.py",
+      "public_path": "source/prepare_test21_gatekeeper_diagnostic.py.txt",
+      "kind": "python",
+      "source_sha256": "bca63ae9bbada37fcc91beb27f1da80d117c7af71d9b8c332b6dc5eb02ecc0ba",
+      "published_sha256": "bca63ae9bbada37fcc91beb27f1da80d117c7af71d9b8c332b6dc5eb02ecc0ba",
+      "published_bytes": 6858,
+      "transformations": []
+    },
+    {
+      "source": "prepare_test22_gatekeeper_service.py",
+      "public_path": "source/prepare_test22_gatekeeper_service.py.txt",
+      "kind": "python",
+      "source_sha256": "8878011f9c4b40e2c0899d2e89ddc3991c7b22601480b74e26688be9bb4d3f85",
+      "published_sha256": "8878011f9c4b40e2c0899d2e89ddc3991c7b22601480b74e26688be9bb4d3f85",
+      "published_bytes": 4531,
+      "transformations": []
+    },
+    {
+      "source": "prepare_test22_gpu_meminfo_diagnostic.py",
+      "public_path": "source/prepare_test22_gpu_meminfo_diagnostic.py.txt",
+      "kind": "python",
+      "source_sha256": "2aced7629f7025c0f9b8b7f73ad9e17be9ffb21076888dac937364880de42564",
+      "published_sha256": "2aced7629f7025c0f9b8b7f73ad9e17be9ffb21076888dac937364880de42564",
+      "published_bytes": 7818,
+      "transformations": []
+    },
+    {
+      "source": "prepare_test22_logging.py",
+      "public_path": "source/prepare_test22_logging.py.txt",
+      "kind": "python",
+      "source_sha256": "79d718ac3e30169321555da46dfefae1f933e3d9ef39944d7cfae64c18179899",
+      "published_sha256": "79d718ac3e30169321555da46dfefae1f933e3d9ef39944d7cfae64c18179899",
+      "published_bytes": 7388,
+      "transformations": []
+    },
+    {
+      "source": "prepare_test23_usb_port_service.py",
+      "public_path": "source/prepare_test23_usb_port_service.py.txt",
+      "kind": "python",
+      "source_sha256": "833cf168762bb17455005f019f9237bedf4046470764b743fa6b5b13147feee3",
+      "published_sha256": "833cf168762bb17455005f019f9237bedf4046470764b743fa6b5b13147feee3",
+      "published_bytes": 5269,
+      "transformations": []
+    },
+    {
+      "source": "read_test22_system_before.py",
+      "public_path": "source/read_test22_system_before.py.txt",
+      "kind": "python",
+      "source_sha256": "75a589a292f9c07de07255feafa81bfec56c7b32475217125a2d0e1efc2f7888",
+      "published_sha256": "75a589a292f9c07de07255feafa81bfec56c7b32475217125a2d0e1efc2f7888",
+      "published_bytes": 581,
+      "transformations": []
+    },
+    {
+      "source": "reboot_boot_adb_only.py",
+      "public_path": "source/reboot_boot_adb_only.py.txt",
+      "kind": "python",
+      "source_sha256": "40699462973470f58851591940a02fbba06416556ca2e0275062b639a203eaac",
+      "published_sha256": "40699462973470f58851591940a02fbba06416556ca2e0275062b639a203eaac",
+      "published_bytes": 5770,
+      "transformations": []
+    },
+    {
+      "source": "reboot_test07_green.py",
+      "public_path": "source/reboot_test07_green.py.txt",
+      "kind": "python",
+      "source_sha256": "42804f35ecaf63939536cdecf3863dfcbad1eafd934199fc3e5a82a731ece7f2",
+      "published_sha256": "42804f35ecaf63939536cdecf3863dfcbad1eafd934199fc3e5a82a731ece7f2",
+      "published_bytes": 5770,
+      "transformations": []
+    },
+    {
+      "source": "reset_test08.py",
+      "public_path": "source/reset_test08.py.txt",
+      "kind": "python",
+      "source_sha256": "b6f46b5ee5ad319c7a3b4694a4909e6cbb46fcb021cb39be31f7ece2b45a731c",
+      "published_sha256": "b6f46b5ee5ad319c7a3b4694a4909e6cbb46fcb021cb39be31f7ece2b45a731c",
+      "published_bytes": 4341,
+      "transformations": []
+    },
+    {
+      "source": "reset_test09.py",
+      "public_path": "source/reset_test09.py.txt",
+      "kind": "python",
+      "source_sha256": "e3f48cdb864f98962d6d458142a99c1bc2f0d6d0c210fa27db3c291ca1a98786",
+      "published_sha256": "e3f48cdb864f98962d6d458142a99c1bc2f0d6d0c210fa27db3c291ca1a98786",
+      "published_bytes": 4365,
+      "transformations": []
+    },
+    {
+      "source": "reset_test10.py",
+      "public_path": "source/reset_test10.py.txt",
+      "kind": "python",
+      "source_sha256": "b96f26070dac2729ba64ee8935e52c3ab9dd3154178f0b3a4c38497ee87c91ed",
+      "published_sha256": "b96f26070dac2729ba64ee8935e52c3ab9dd3154178f0b3a4c38497ee87c91ed",
+      "published_bytes": 4381,
+      "transformations": []
+    },
+    {
+      "source": "reset_test11.py",
+      "public_path": "source/reset_test11.py.txt",
+      "kind": "python",
+      "source_sha256": "d535751b55e2755498da9db002b99d8762b94871ce1816a66a9c90bfa19a563a",
+      "published_sha256": "d535751b55e2755498da9db002b99d8762b94871ce1816a66a9c90bfa19a563a",
+      "published_bytes": 4360,
+      "transformations": []
+    },
+    {
+      "source": "reset_test12.py",
+      "public_path": "source/reset_test12.py.txt",
+      "kind": "python",
+      "source_sha256": "01b9e437ee8c714bbd863b6d289abb27c8ca53bde630126186cbea85a82b85b4",
+      "published_sha256": "01b9e437ee8c714bbd863b6d289abb27c8ca53bde630126186cbea85a82b85b4",
+      "published_bytes": 4385,
+      "transformations": []
+    },
+    {
+      "source": "reset_test13.py",
+      "public_path": "source/reset_test13.py.txt",
+      "kind": "python",
+      "source_sha256": "f1c1c777eff3b224110fec9635d608a3aa4df42d8535efa980c39c5bbcac7753",
+      "published_sha256": "f1c1c777eff3b224110fec9635d608a3aa4df42d8535efa980c39c5bbcac7753",
+      "published_bytes": 4389,
+      "transformations": []
+    },
+    {
+      "source": "reset_test14.py",
+      "public_path": "source/reset_test14.py.txt",
+      "kind": "python",
+      "source_sha256": "3570771d235567ee0fc7b902973fef1cdab93ac8674a8c26ffb80185e027ac2a",
+      "published_sha256": "3570771d235567ee0fc7b902973fef1cdab93ac8674a8c26ffb80185e027ac2a",
+      "published_bytes": 4361,
+      "transformations": []
+    },
+    {
+      "source": "reset_test15.py",
+      "public_path": "source/reset_test15.py.txt",
+      "kind": "python",
+      "source_sha256": "35aee6f8997c249627ac48e2c05ea53ec7813e74bc57b73601aaf4e7c9b6ec0b",
+      "published_sha256": "35aee6f8997c249627ac48e2c05ea53ec7813e74bc57b73601aaf4e7c9b6ec0b",
+      "published_bytes": 4369,
+      "transformations": []
+    },
+    {
+      "source": "reset_test16.py",
+      "public_path": "source/reset_test16.py.txt",
+      "kind": "python",
+      "source_sha256": "2ff8e8cbefa4b537ee051d83e41d9e20688d6020fadd04a7e476efc24e7d59cb",
+      "published_sha256": "2ff8e8cbefa4b537ee051d83e41d9e20688d6020fadd04a7e476efc24e7d59cb",
+      "published_bytes": 4349,
+      "transformations": []
+    },
+    {
+      "source": "reset_test17_usb.py",
+      "public_path": "source/reset_test17_usb.py.txt",
+      "kind": "python",
+      "source_sha256": "0a192572d7872f346ac26739a77be02727b6bbd317795edbc67c33dbadb2d56d",
+      "published_sha256": "0a192572d7872f346ac26739a77be02727b6bbd317795edbc67c33dbadb2d56d",
+      "published_bytes": 4349,
+      "transformations": []
+    },
+    {
+      "source": "reset_test18_cleanup.py",
+      "public_path": "source/reset_test18_cleanup.py.txt",
+      "kind": "python",
+      "source_sha256": "beeb308981ae6630f01f28126b3d361c7b0544cd9a18c4c2a271a87d66e8fdec",
+      "published_sha256": "beeb308981ae6630f01f28126b3d361c7b0544cd9a18c4c2a271a87d66e8fdec",
+      "published_bytes": 4329,
+      "transformations": []
+    },
+    {
+      "source": "reset_test19_los_recovery.py",
+      "public_path": "source/reset_test19_los_recovery.py.txt",
+      "kind": "python",
+      "source_sha256": "ce56505d21733842e2bf4088ec33e96aee29523cbf49a2d66f60997f6b21bf56",
+      "published_sha256": "ce56505d21733842e2bf4088ec33e96aee29523cbf49a2d66f60997f6b21bf56",
+      "published_bytes": 4349,
+      "transformations": []
+    },
+    {
+      "source": "reset_test22_recovery_bcb.py",
+      "public_path": "source/reset_test22_recovery_bcb.py.txt",
+      "kind": "python",
+      "source_sha256": "07beb2d7a6465b9709053ac678a56e0493c07204e6b0d4c0e1270a14f8a66f4e",
+      "published_sha256": "07beb2d7a6465b9709053ac678a56e0493c07204e6b0d4c0e1270a14f8a66f4e",
+      "published_bytes": 3767,
+      "transformations": []
+    },
+    {
+      "source": "reset_test22_verified.py",
+      "public_path": "source/reset_test22_verified.py.txt",
+      "kind": "python",
+      "source_sha256": "49066d54bc74a766cf79d3c1f6a72bf738f5e99a728b0c69cbd5e068fa1f511f",
+      "published_sha256": "49066d54bc74a766cf79d3c1f6a72bf738f5e99a728b0c69cbd5e068fa1f511f",
+      "published_bytes": 2820,
+      "transformations": []
+    },
+    {
+      "source": "reset_test23_verified.py",
+      "public_path": "source/reset_test23_verified.py.txt",
+      "kind": "python",
+      "source_sha256": "6911cb4e8006d4171ccc2cdab03587e57779d836f553392aefb99f48920217d5",
+      "published_sha256": "6911cb4e8006d4171ccc2cdab03587e57779d836f553392aefb99f48920217d5",
+      "published_bytes": 2819,
+      "transformations": []
+    },
+    {
+      "source": "run_test10.py",
+      "public_path": "source/run_test10.py.txt",
+      "kind": "python",
+      "source_sha256": "e699d799b41069abf6e7be9375c462189b4a2afe30ea465fdc66b9da02acbfcf",
+      "published_sha256": "2606d5e9fd68117cee690b06daf1fc552bcad38365af06a0261e08bb15f91ca5",
+      "published_bytes": 5635,
+      "transformations": [
+        {
+          "kind": "local_path_or_session_placeholder",
+          "count": 2
+        },
+        {
+          "kind": "local_path_or_session_placeholder",
+          "count": 1
+        },
+        {
+          "kind": "local_path_or_session_placeholder",
+          "count": 1
+        },
+        {
+          "kind": "local_path_or_session_placeholder",
+          "count": 5
+        }
+      ]
+    },
+    {
+      "source": "run_test11.py",
+      "public_path": "source/run_test11.py.txt",
+      "kind": "python",
+      "source_sha256": "55668269752d0ae79a2aafe2b23a08ab8280d2874bb6c315b6bfcf917b07c41a",
+      "published_sha256": "d2e8d4c2053ea358733afd3754796112815ce3cbddde7e7e2a6063be74ee81bd",
+      "published_bytes": 5625,
+      "transformations": [
+        {
+          "kind": "local_path_or_session_placeholder",
+          "count": 2
+        },
+        {
+          "kind": "local_path_or_session_placeholder",
+          "count": 1
+        },
+        {
+          "kind": "local_path_or_session_placeholder",
+          "count": 1
+        },
+        {
+          "kind": "local_path_or_session_placeholder",
+          "count": 5
+        }
+      ]
+    },
+    {
+      "source": "run_test12.py",
+      "public_path": "source/run_test12.py.txt",
+      "kind": "python",
+      "source_sha256": "d909a4f580da570a945d04277f05c8c52a5bd0d3b5990c522158e75039b221dc",
+      "published_sha256": "71b7f032a12593fdf117767e831ebc22d9f0589d2e80a545ad5084f91f461145",
+      "published_bytes": 5668,
+      "transformations": [
+        {
+          "kind": "local_path_or_session_placeholder",
+          "count": 2
+        },
+        {
+          "kind": "local_path_or_session_placeholder",
+          "count": 1
+        },
+        {
+          "kind": "local_path_or_session_placeholder",
+          "count": 1
+        },
+        {
+          "kind": "local_path_or_session_placeholder",
+          "count": 5
+        }
+      ]
+    },
+    {
+      "source": "run_test13.py",
+      "public_path": "source/run_test13.py.txt",
+      "kind": "python",
+      "source_sha256": "2c4a46a8cfee7a6440bad34767a612aa8ae70ed841f10605a39a4cbd59ea6e30",
+      "published_sha256": "c2d905d4055a1e331623e757d5dae24c9b580bd0f350df028ca29ce181c8ab17",
+      "published_bytes": 5699,
+      "transformations": [
+        {
+          "kind": "local_path_or_session_placeholder",
+          "count": 2
+        },
+        {
+          "kind": "local_path_or_session_placeholder",
+          "count": 1
+        },
+        {
+          "kind": "local_path_or_session_placeholder",
+          "count": 1
+        },
+        {
+          "kind": "local_path_or_session_placeholder",
+          "count": 5
+        }
+      ]
+    },
+    {
+      "source": "run_test14.py",
+      "public_path": "source/run_test14.py.txt",
+      "kind": "python",
+      "source_sha256": "bd6a0952a5e6df40110c495c5453873ce784f2d2e5fd0b8462947988db3cf00a",
+      "published_sha256": "39940a27865e520e47832f3197db766b4b9cbd7acf4513931545fb846069fd26",
+      "published_bytes": 5671,
+      "transformations": [
+        {
+          "kind": "local_path_or_session_placeholder",
+          "count": 2
+        },
+        {
+          "kind": "local_path_or_session_placeholder",
+          "count": 1
+        },
+        {
+          "kind": "local_path_or_session_placeholder",
+          "count": 1
+        },
+        {
+          "kind": "local_path_or_session_placeholder",
+          "count": 5
+        }
+      ]
+    },
+    {
+      "source": "run_test15.py",
+      "public_path": "source/run_test15.py.txt",
+      "kind": "python",
+      "source_sha256": "c78df8c7af84a50cef019e532688e71bf5dac6070c35110b0e660ca3c0d9108c",
+      "published_sha256": "be5079c58218e89ae5ea0c834857b42a340a5753d3874820edc8f7bc3b857d67",
+      "published_bytes": 5683,
+      "transformations": [
+        {
+          "kind": "local_path_or_session_placeholder",
+          "count": 2
+        },
+        {
+          "kind": "local_path_or_session_placeholder",
+          "count": 1
+        },
+        {
+          "kind": "local_path_or_session_placeholder",
+          "count": 1
+        },
+        {
+          "kind": "local_path_or_session_placeholder",
+          "count": 5
+        }
+      ]
+    },
+    {
+      "source": "run_test16.py",
+      "public_path": "source/run_test16.py.txt",
+      "kind": "python",
+      "source_sha256": "61a3c45bfb884e7a2fc1a6d44318b6cec0b6cacf6b855c9db6243a37e06bd892",
+      "published_sha256": "bff94dabc70811fb98fc043a2e7f54448591cb3eb23ae821cb8e1c88826a015b",
+      "published_bytes": 6174,
+      "transformations": [
+        {
+          "kind": "local_path_or_session_placeholder",
+          "count": 2
+        },
+        {
+          "kind": "local_path_or_session_placeholder",
+          "count": 1
+        },
+        {
+          "kind": "local_path_or_session_placeholder",
+          "count": 1
+        },
+        {
+          "kind": "local_path_or_session_placeholder",
+          "count": 5
+        }
+      ]
+    },
+    {
+      "source": "run_test16_cache_after.py",
+      "public_path": "source/run_test16_cache_after.py.txt",
+      "kind": "python",
+      "source_sha256": "e1a74acc90464a43faf6356d76019f3c20289b42228368747c0b690c62d0eb60",
+      "published_sha256": "5a90ab6c406e3035bda9959270bafe7a2784e097534dc2516cabe29366a78bbe",
+      "published_bytes": 3576,
+      "transformations": [
+        {
+          "kind": "local_path_or_session_placeholder",
+          "count": 2
+        },
+        {
+          "kind": "local_path_or_session_placeholder",
+          "count": 1
+        },
+        {
+          "kind": "local_path_or_session_placeholder",
+          "count": 1
+        },
+        {
+          "kind": "local_path_or_session_placeholder",
+          "count": 4
+        }
+      ]
+    },
+    {
+      "source": "run_test16_cache_backup.py",
+      "public_path": "source/run_test16_cache_backup.py.txt",
+      "kind": "python",
+      "source_sha256": "4aeb27c7f15a959bc522d70ad18ba4b03d34faa5e15dbe2f7b0073b4f40ec30a",
+      "published_sha256": "7577c3c273fbc1e93fc1279539d95a59242798c98e59960d64c7dc4e78b3a45c",
+      "published_bytes": 3380,
+      "transformations": [
+        {
+          "kind": "local_path_or_session_placeholder",
+          "count": 2
+        },
+        {
+          "kind": "local_path_or_session_placeholder",
+          "count": 1
+        },
+        {
+          "kind": "local_path_or_session_placeholder",
+          "count": 1
+        },
+        {
+          "kind": "local_path_or_session_placeholder",
+          "count": 4
+        }
+      ]
+    },
+    {
+      "source": "run_test17_cache_after.py",
+      "public_path": "source/run_test17_cache_after.py.txt",
+      "kind": "python",
+      "source_sha256": "211429846cf6e1cb9fb0af4f70c931675355618533bc9ef947dc4f1686a61890",
+      "published_sha256": "d2234ed1ec2b2ec913c96e7b4b5645effe0670c8f285b32abcec92286eadfe29",
+      "published_bytes": 3575,
+      "transformations": [
+        {
+          "kind": "local_path_or_session_placeholder",
+          "count": 2
+        },
+        {
+          "kind": "local_path_or_session_placeholder",
+          "count": 1
+        },
+        {
+          "kind": "local_path_or_session_placeholder",
+          "count": 1
+        },
+        {
+          "kind": "local_path_or_session_placeholder",
+          "count": 4
+        }
+      ]
+    },
+    {
+      "source": "run_test17_usb.py",
+      "public_path": "source/run_test17_usb.py.txt",
+      "kind": "python",
+      "source_sha256": "0e7aef1ca18f3ea1f563db3728a03411ba4d1098fae46168807285e37397d414",
+      "published_sha256": "11e36ce4af041c9294ab01fc1a5d1bdeb88ded8ff258ac7dd32a76d4c8e594cc",
+      "published_bytes": 6181,
+      "transformations": [
+        {
+          "kind": "local_path_or_session_placeholder",
+          "count": 2
+        },
+        {
+          "kind": "local_path_or_session_placeholder",
+          "count": 1
+        },
+        {
+          "kind": "local_path_or_session_placeholder",
+          "count": 1
+        },
+        {
+          "kind": "local_path_or_session_placeholder",
+          "count": 5
+        }
+      ]
+    },
+    {
+      "source": "run_test18_cleanup.py",
+      "public_path": "source/run_test18_cleanup.py.txt",
+      "kind": "python",
+      "source_sha256": "17d9aae5783c591455df336e0300c1949a1d03123b34fe0b519433f54e82d0c0",
+      "published_sha256": "a6735fe643b0ad7749dce91d3c420848c46fdc5729f576b9c7d3e17412b10b19",
+      "published_bytes": 6438,
+      "transformations": [
+        {
+          "kind": "local_path_or_session_placeholder",
+          "count": 2
+        },
+        {
+          "kind": "local_path_or_session_placeholder",
+          "count": 1
+        },
+        {
+          "kind": "local_path_or_session_placeholder",
+          "count": 1
+        },
+        {
+          "kind": "local_path_or_session_placeholder",
+          "count": 5
+        }
+      ]
+    },
+    {
+      "source": "run_test19_cache_after.py",
+      "public_path": "source/run_test19_cache_after.py.txt",
+      "kind": "python",
+      "source_sha256": "ca2fb9d2d15d0fa4d5152ec9cafe3b4b1baf10668a32f4a00ef570f4e089381c",
+      "published_sha256": "3c4d095756da64a27e002586ac7924c117fe2223f9d406f6bcbf0678684c7ff9",
+      "published_bytes": 3575,
+      "transformations": [
+        {
+          "kind": "local_path_or_session_placeholder",
+          "count": 2
+        },
+        {
+          "kind": "local_path_or_session_placeholder",
+          "count": 1
+        },
+        {
+          "kind": "local_path_or_session_placeholder",
+          "count": 1
+        },
+        {
+          "kind": "local_path_or_session_placeholder",
+          "count": 4
+        }
+      ]
+    },
+    {
+      "source": "run_test19_los_recovery.py",
+      "public_path": "source/run_test19_los_recovery.py.txt",
+      "kind": "python",
+      "source_sha256": "78d161fea2541bd5259d94194f2686765e921969038093065e14f557bd4a0d42",
+      "published_sha256": "9f3d4b4950eb14a2df014dcd3bfc1c1516733ccebccbeb49a1740ded9b1d6b1b",
+      "published_bytes": 6478,
+      "transformations": [
+        {
+          "kind": "local_path_or_session_placeholder",
+          "count": 2
+        },
+        {
+          "kind": "local_path_or_session_placeholder",
+          "count": 1
+        },
+        {
+          "kind": "local_path_or_session_placeholder",
+          "count": 1
+        },
+        {
+          "kind": "local_path_or_session_placeholder",
+          "count": 5
+        }
+      ]
+    },
+    {
+      "source": "run_test21_gatekeeper_live.py",
+      "public_path": "source/run_test21_gatekeeper_live.py.txt",
+      "kind": "python",
+      "source_sha256": "3b2f1d65e02d2abf7e3443e95a61959a5309e1a2ac74e365127540c952624684",
+      "published_sha256": "3b2f1d65e02d2abf7e3443e95a61959a5309e1a2ac74e365127540c952624684",
+      "published_bytes": 7628,
+      "transformations": []
+    },
+    {
+      "source": "run_test22_edl_system.py",
+      "public_path": "source/run_test22_edl_system.py.txt",
+      "kind": "python",
+      "source_sha256": "8f0231674bc620b550e8baf024661a6f5218b3b34d9b486ff3218f3492c28d1e",
+      "published_sha256": "8f0231674bc620b550e8baf024661a6f5218b3b34d9b486ff3218f3492c28d1e",
+      "published_bytes": 13558,
+      "transformations": []
+    },
+    {
+      "source": "run_test22_recovery_bcb.py",
+      "public_path": "source/run_test22_recovery_bcb.py.txt",
+      "kind": "python",
+      "source_sha256": "edc84224381e91ccfe3d8e3bca1e02b96cac73138268d4d1974fa6dbdee787ee",
+      "published_sha256": "edc84224381e91ccfe3d8e3bca1e02b96cac73138268d4d1974fa6dbdee787ee",
+      "published_bytes": 10748,
+      "transformations": []
+    },
+    {
+      "source": "run_test23_edl_system.py",
+      "public_path": "source/run_test23_edl_system.py.txt",
+      "kind": "python",
+      "source_sha256": "59eb68812b68373ea3d420bc257d69e6b2c13b084f424dfb78673e7eaa12b9f3",
+      "published_sha256": "59eb68812b68373ea3d420bc257d69e6b2c13b084f424dfb78673e7eaa12b9f3",
+      "published_bytes": 13398,
+      "transformations": []
+    },
+    {
+      "source": "sahara_load.py",
+      "public_path": "source/sahara_load.py.txt",
+      "kind": "python",
+      "source_sha256": "7383b5b60ac8c4bc3f59f0cf42c9ebf563687bed763cd51e5be4912630bc71ee",
+      "published_sha256": "7383b5b60ac8c4bc3f59f0cf42c9ebf563687bed763cd51e5be4912630bc71ee",
+      "published_bytes": 5883,
+      "transformations": []
+    },
+    {
+      "source": "stage_test20_package.py",
+      "public_path": "source/stage_test20_package.py.txt",
+      "kind": "python",
+      "source_sha256": "fdcbf2c9e79c2552e0bb48a20411610c7550d1f0c2b14293cce0d73b6456c394",
+      "published_sha256": "db7995db3b43c33b88cf4e25247ec9a42b047b814a32c241985de782beb45a1b",
+      "published_bytes": 3970,
+      "transformations": [
+        {
+          "kind": "local_path_or_session_placeholder",
+          "count": 2
+        },
+        {
+          "kind": "local_path_or_session_placeholder",
+          "count": 1
+        },
+        {
+          "kind": "local_path_or_session_placeholder",
+          "count": 1
+        },
+        {
+          "kind": "local_path_or_session_placeholder",
+          "count": 3
+        }
+      ]
+    },
+    {
+      "source": "stage_test22_delta.py",
+      "public_path": "source/stage_test22_delta.py.txt",
+      "kind": "python",
+      "source_sha256": "bcc7d110a1e3cbdb7e0c4df070bdff3eddbbfccc43abd2d1c027a65c2296d81b",
+      "published_sha256": "bcc7d110a1e3cbdb7e0c4df070bdff3eddbbfccc43abd2d1c027a65c2296d81b",
+      "published_bytes": 2753,
+      "transformations": []
+    },
+    {
+      "source": "stage_test23_delta.py",
+      "public_path": "source/stage_test23_delta.py.txt",
+      "kind": "python",
+      "source_sha256": "4a86bbf83ae23fb96c4319789401f42cb0ac2be2b9955699a334a3123ef56867",
+      "published_sha256": "4a86bbf83ae23fb96c4319789401f42cb0ac2be2b9955699a334a3123ef56867",
+      "published_bytes": 2753,
+      "transformations": []
+    },
+    {
+      "source": "test_adb_boot_usb_control.py",
+      "public_path": "source/test_adb_boot_usb_control.py.txt",
+      "kind": "python",
+      "source_sha256": "41c9c9152625a451a563951dd32eca2acb2962bee52d1fc8bf745f0319e0b967",
+      "published_sha256": "6d5ae427f6f9680d6a31db4b36bcd28960dd2b176380bdd9bf491e2790dab31d",
+      "published_bytes": 11509,
+      "transformations": [
+        {
+          "kind": "local_path_or_session_placeholder",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "source": "test_adb_recovery_control.py",
+      "public_path": "source/test_adb_recovery_control.py.txt",
+      "kind": "python",
+      "source_sha256": "140ff4e0d866624aa9334af2daa492df22ae6f48328dfe04eda5341f25c2d86b",
+      "published_sha256": "140ff4e0d866624aa9334af2daa492df22ae6f48328dfe04eda5341f25c2d86b",
+      "published_bytes": 14163,
+      "transformations": []
+    },
+    {
+      "source": "test_adb_test07_control.py",
+      "public_path": "source/test_adb_test07_control.py.txt",
+      "kind": "python",
+      "source_sha256": "95e50b9b2cec5aeec0cb03417d7140c8447fdd7a8eab4ce9bda95699000a1c29",
+      "published_sha256": "92ca254b0dc966e3b3d05a58e15f3fd4ebe37d8839ecbd1f1ba8b95fd934ad13",
+      "published_bytes": 6695,
+      "transformations": [
+        {
+          "kind": "local_path_or_session_placeholder",
+          "count": 2
+        }
+      ]
+    },
+    {
+      "source": "test_adb_test07_green_control.py",
+      "public_path": "source/test_adb_test07_green_control.py.txt",
+      "kind": "python",
+      "source_sha256": "83b276a5c56ed5b6eaf1781aa07d63d2faa35a4c9bffd4d9631afa0204cabff0",
+      "published_sha256": "74698f4d4855e62a6f5d58eecbe48a82e32601b0419c9cecd4bdbf379ca45b03",
+      "published_bytes": 6702,
+      "transformations": [
+        {
+          "kind": "local_path_or_session_placeholder",
+          "count": 2
+        }
+      ]
+    },
+    {
+      "source": "test_firehose_boot_test.py",
+      "public_path": "source/test_firehose_boot_test.py.txt",
+      "kind": "python",
+      "source_sha256": "6957625fdf7b660dc8998cd52bcb0906948d029ac26613a945921f62e513cc0c",
+      "published_sha256": "e1324ea9e56fec0a985fb85ec3b4f793967a07db89e8e6980de8234f4042b151",
+      "published_bytes": 6374,
+      "transformations": [
+        {
+          "kind": "local_path_or_session_placeholder",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "source": "test_los23_full_security.py",
+      "public_path": "source/test_los23_full_security.py.txt",
+      "kind": "python",
+      "source_sha256": "b62450fdcfb5168889756d9602654f96649e1be42d527e7043e39fbc2d1bd486",
+      "published_sha256": "b62450fdcfb5168889756d9602654f96649e1be42d527e7043e39fbc2d1bd486",
+      "published_bytes": 3925,
+      "transformations": []
+    },
+    {
+      "source": "test_reader_recovery_route.py",
+      "public_path": "source/test_reader_recovery_route.py.txt",
+      "kind": "python",
+      "source_sha256": "c19af9ba25c292a78914985be2170f7ca4290376d2cc0dd17c53f53efe3ab511",
+      "published_sha256": "c19af9ba25c292a78914985be2170f7ca4290376d2cc0dd17c53f53efe3ab511",
+      "published_bytes": 7173,
+      "transformations": []
+    },
+    {
+      "source": "test_test20_logging_mocks.py",
+      "public_path": "source/test_test20_logging_mocks.py.txt",
+      "kind": "python",
+      "source_sha256": "26f9ea3cafbdc9b6d3204bfcb04e6c1480bc0368ad3737c153b511b2741b6545",
+      "published_sha256": "26f9ea3cafbdc9b6d3204bfcb04e6c1480bc0368ad3737c153b511b2741b6545",
+      "published_bytes": 10262,
+      "transformations": []
+    },
+    {
+      "source": "test_test22_edl_system.py",
+      "public_path": "source/test_test22_edl_system.py.txt",
+      "kind": "python",
+      "source_sha256": "7b9ed975065ba3045dec91a2149848105c5f5befaf8c5293558fb235aeb98da6",
+      "published_sha256": "7b9ed975065ba3045dec91a2149848105c5f5befaf8c5293558fb235aeb98da6",
+      "published_bytes": 9736,
+      "transformations": []
+    },
+    {
+      "source": "test_test23_edl_system.py",
+      "public_path": "source/test_test23_edl_system.py.txt",
+      "kind": "python",
+      "source_sha256": "5a37f2c6d63a7589f78e86010e535992dc8cf6b0164e3b95ecc357ffb4a62cea",
+      "published_sha256": "5a37f2c6d63a7589f78e86010e535992dc8cf6b0164e3b95ecc357ffb4a62cea",
+      "published_bytes": 9741,
+      "transformations": []
+    },
+    {
+      "source": "test_test23_reset_guards.py",
+      "public_path": "source/test_test23_reset_guards.py.txt",
+      "kind": "python",
+      "source_sha256": "5f726696ea88e66a1aff5aef78f82cd6256e5b82a74ee9efe0cfb064bdbdb64b",
+      "published_sha256": "5f726696ea88e66a1aff5aef78f82cd6256e5b82a74ee9efe0cfb064bdbdb64b",
+      "published_bytes": 8679,
+      "transformations": []
+    },
+    {
+      "source": "verify_test20_install_local.py",
+      "public_path": "source/verify_test20_install_local.py.txt",
+      "kind": "python",
+      "source_sha256": "3e293814435964322d4d79011f9ada462762a050e81b28f99fc6ebfb8ae7324c",
+      "published_sha256": "83d0fd7718168e04545feb0f260fa66e29077c4d3bf950654725d3c1ca40cf9b",
+      "published_bytes": 5000,
+      "transformations": [
+        {
+          "kind": "local_path_or_session_placeholder",
+          "count": 1
+        },
+        {
+          "kind": "local_path_or_session_placeholder",
+          "count": 1
+        },
+        {
+          "kind": "local_path_or_session_placeholder",
+          "count": 1
+        },
+        {
+          "kind": "local_path_or_session_placeholder",
+          "count": 3
+        }
+      ]
+    },
+    {
+      "source": "verify_test22_after_evidence.py",
+      "public_path": "source/verify_test22_after_evidence.py.txt",
+      "kind": "python",
+      "source_sha256": "fa1cba266c22123ab6631bd030aa6aba0d1f19ca6b17432ec38e80d9c8c708a3",
+      "published_sha256": "a725fc9ab47b2e725948a3037826e2f51e64fa3c9bada66a86aa4d2ac87ffefc",
+      "published_bytes": 2820,
+      "transformations": [
+        {
+          "kind": "local_path_or_session_placeholder",
+          "count": 1
+        },
+        {
+          "kind": "local_path_or_session_placeholder",
+          "count": 1
+        },
+        {
+          "kind": "local_path_or_session_placeholder",
+          "count": 1
+        },
+        {
+          "kind": "local_path_or_session_placeholder",
+          "count": 2
+        }
+      ]
+    },
+    {
+      "source": "verify_test22_before_evidence.py",
+      "public_path": "source/verify_test22_before_evidence.py.txt",
+      "kind": "python",
+      "source_sha256": "c848ae040804f5b6d2a3ffe95f7978b5dbbc60376d2f9bc4068e1640f715b7bd",
+      "published_sha256": "952c5218834f01ddde387f3c26a5de83670d9bfdc0215b519d30915aae0fa662",
+      "published_bytes": 1725,
+      "transformations": [
+        {
+          "kind": "local_path_or_session_placeholder",
+          "count": 1
+        },
+        {
+          "kind": "local_path_or_session_placeholder",
+          "count": 1
+        },
+        {
+          "kind": "local_path_or_session_placeholder",
+          "count": 1
+        },
+        {
+          "kind": "local_path_or_session_placeholder",
+          "count": 2
+        }
+      ]
+    },
+    {
+      "source": "verify_test23_after_evidence.py",
+      "public_path": "source/verify_test23_after_evidence.py.txt",
+      "kind": "python",
+      "source_sha256": "f644934f6c6396726302faf74809adef2ad866a799d2e6c2d6b968048e756bef",
+      "published_sha256": "d5e8a7ff9a997c0a24b11160005d7855f3a2212f487d6d4e80729384aa91e6ca",
+      "published_bytes": 2819,
+      "transformations": [
+        {
+          "kind": "local_path_or_session_placeholder",
+          "count": 1
+        },
+        {
+          "kind": "local_path_or_session_placeholder",
+          "count": 1
+        },
+        {
+          "kind": "local_path_or_session_placeholder",
+          "count": 1
+        },
+        {
+          "kind": "local_path_or_session_placeholder",
+          "count": 2
+        }
+      ]
+    },
+    {
+      "source": "verify_test23_before_evidence.py",
+      "public_path": "source/verify_test23_before_evidence.py.txt",
+      "kind": "python",
+      "source_sha256": "bb4b23219264943bc7373742d64c36ee5526a1895cd880300d9dd01d673c9941",
+      "published_sha256": "1e9cdaedb5a955f002cecdbe89af7426f77383d49efe0dd8ee0ab17301f0894a",
+      "published_bytes": 1725,
+      "transformations": [
+        {
+          "kind": "local_path_or_session_placeholder",
+          "count": 1
+        },
+        {
+          "kind": "local_path_or_session_placeholder",
+          "count": 1
+        },
+        {
+          "kind": "local_path_or_session_placeholder",
+          "count": 1
+        },
+        {
+          "kind": "local_path_or_session_placeholder",
+          "count": 2
+        }
+      ]
+    },
+    {
+      "source": "watch_test22_android.py",
+      "public_path": "source/watch_test22_android.py.txt",
+      "kind": "python",
+      "source_sha256": "2b2de37c34ff44c5c90ddcde78a942004ce97019128ff3a4803ebd084009f3e1",
+      "published_sha256": "2b2de37c34ff44c5c90ddcde78a942004ce97019128ff3a4803ebd084009f3e1",
+      "published_bytes": 687,
+      "transformations": []
+    },
+    {
+      "source": "test16-collect.sh",
+      "public_path": "payloads/test16-collect.sh.txt",
+      "kind": "payload",
+      "source_sha256": "c714e269b8a9daf0ceae5302e2437db6df87ed9214eefe5a5c306c8b4eec152d",
+      "published_sha256": "c714e269b8a9daf0ceae5302e2437db6df87ed9214eefe5a5c306c8b4eec152d",
+      "published_bytes": 5399,
+      "transformations": []
+    },
+    {
+      "source": "test16-persist.sh",
+      "public_path": "payloads/test16-persist.sh.txt",
+      "kind": "payload",
+      "source_sha256": "32e7c83c3b657fd61762da92bb530f441f13ea041694373788476a60420f5cf1",
+      "published_sha256": "32e7c83c3b657fd61762da92bb530f441f13ea041694373788476a60420f5cf1",
+      "published_bytes": 4691,
+      "transformations": []
+    },
+    {
+      "source": "test17-collect.sh",
+      "public_path": "payloads/test17-collect.sh.txt",
+      "kind": "payload",
+      "source_sha256": "7a92de8aa64bb5582448f657226224fcb9aac9582a8460c36320f5bab3434605",
+      "published_sha256": "7a92de8aa64bb5582448f657226224fcb9aac9582a8460c36320f5bab3434605",
+      "published_bytes": 5399,
+      "transformations": []
+    },
+    {
+      "source": "test17-persist.sh",
+      "public_path": "payloads/test17-persist.sh.txt",
+      "kind": "payload",
+      "source_sha256": "2a15cd420a7aab3e70e8950342f610763f1a6f00ae35ce7917b3f3389243ab1b",
+      "published_sha256": "2a15cd420a7aab3e70e8950342f610763f1a6f00ae35ce7917b3f3389243ab1b",
+      "published_bytes": 4584,
+      "transformations": []
+    },
+    {
+      "source": "test17-usb-collect.sh",
+      "public_path": "payloads/test17-usb-collect.sh.txt",
+      "kind": "payload",
+      "source_sha256": "0b4acdd1a550a4cdb5a690224d5aa16f710b7c824c7d7067fbc95d35e9cd8141",
+      "published_sha256": "0b4acdd1a550a4cdb5a690224d5aa16f710b7c824c7d7067fbc95d35e9cd8141",
+      "published_bytes": 6400,
+      "transformations": []
+    },
+    {
+      "source": "test17-usb-persist.sh",
+      "public_path": "payloads/test17-usb-persist.sh.txt",
+      "kind": "payload",
+      "source_sha256": "10dfd93d113ee737d98c4ae000028b2ec8002f7c75a3e6ed5989cb0fd197e937",
+      "published_sha256": "10dfd93d113ee737d98c4ae000028b2ec8002f7c75a3e6ed5989cb0fd197e937",
+      "published_bytes": 4691,
+      "transformations": []
+    },
+    {
+      "source": "test19-los-collect.sh",
+      "public_path": "payloads/test19-los-collect.sh.txt",
+      "kind": "payload",
+      "source_sha256": "e0fea497e8993797848bc38bf70e6f8bd2da8483195a6babc23517dc4726547a",
+      "published_sha256": "e0fea497e8993797848bc38bf70e6f8bd2da8483195a6babc23517dc4726547a",
+      "published_bytes": 6580,
+      "transformations": []
+    },
+    {
+      "source": "test19-los-persist.sh",
+      "public_path": "payloads/test19-los-persist.sh.txt",
+      "kind": "payload",
+      "source_sha256": "a65ee43cdd3c0620188eac2500c71407e3977938a6ee62845188a44dd39eca04",
+      "published_sha256": "a65ee43cdd3c0620188eac2500c71407e3977938a6ee62845188a44dd39eca04",
+      "published_bytes": 4747,
+      "transformations": []
+    },
+    {
+      "source": "test20-f2fs-ram-check.sh",
+      "public_path": "payloads/test20-f2fs-ram-check.sh.txt",
+      "kind": "payload",
+      "source_sha256": "29fa693952ace46cd895cdd33a6a3c9b121d3394053a6d9968404c44f4f03770",
+      "published_sha256": "29fa693952ace46cd895cdd33a6a3c9b121d3394053a6d9968404c44f4f03770",
+      "published_bytes": 1788,
+      "transformations": []
+    },
+    {
+      "source": "test20-los-persist.sh",
+      "public_path": "payloads/test20-los-persist.sh.txt",
+      "kind": "payload",
+      "source_sha256": "ff902a886f7ac12f6921bb9e72b3b0971d8e61e599934047c733cacf1f2f974b",
+      "published_sha256": "ff902a886f7ac12f6921bb9e72b3b0971d8e61e599934047c733cacf1f2f974b",
+      "published_bytes": 3428,
+      "transformations": []
+    },
+    {
+      "source": "test16-init.rc",
+      "public_path": "payloads/test16-init.rc.txt",
+      "kind": "payload",
+      "source_sha256": "0aa288b9909af6977c6f84e8e98da8ccb7ed8679fe22792de908515fef2e8135",
+      "published_sha256": "0aa288b9909af6977c6f84e8e98da8ccb7ed8679fe22792de908515fef2e8135",
+      "published_bytes": 512,
+      "transformations": []
+    },
+    {
+      "source": "test17-init.rc",
+      "public_path": "payloads/test17-init.rc.txt",
+      "kind": "payload",
+      "source_sha256": "8e619cf7e9becbbe559866b121aba55397228b6edf6aaa30abaf1b3dfc89801f",
+      "published_sha256": "8e619cf7e9becbbe559866b121aba55397228b6edf6aaa30abaf1b3dfc89801f",
+      "published_bytes": 451,
+      "transformations": []
+    },
+    {
+      "source": "test11_deferred_marker.S",
+      "public_path": "payloads/test11_deferred_marker.S.txt",
+      "kind": "assembly",
+      "source_sha256": "56e2d8554d46ddfd37a68a57655822af7c562aa8f1013600b8734446adf7ad97",
+      "published_sha256": "56e2d8554d46ddfd37a68a57655822af7c562aa8f1013600b8734446adf7ad97",
+      "published_bytes": 1925,
+      "transformations": []
+    },
+    {
+      "source": "test11_deferred_marker_v2.S",
+      "public_path": "payloads/test11_deferred_marker_v2.S.txt",
+      "kind": "assembly",
+      "source_sha256": "ddb7667dbcddc8195d254db865c9d784785656532826feb607a63a84ba3c3bda",
+      "published_sha256": "ddb7667dbcddc8195d254db865c9d784785656532826feb607a63a84ba3c3bda",
+      "published_bytes": 2010,
+      "transformations": []
+    },
+    {
+      "source": "test11_deferred_marker_v3.S",
+      "public_path": "payloads/test11_deferred_marker_v3.S.txt",
+      "kind": "assembly",
+      "source_sha256": "b1249aaba2276d05f537d27b265a2ddd3e699ba800a1f8b0d39043955f86804a",
+      "published_sha256": "b1249aaba2276d05f537d27b265a2ddd3e699ba800a1f8b0d39043955f86804a",
+      "published_bytes": 2084,
+      "transformations": []
+    },
+    {
+      "source": "test13_conditional_flush.S",
+      "public_path": "payloads/test13_conditional_flush.S.txt",
+      "kind": "assembly",
+      "source_sha256": "29e99d72666efdf9fc9fc0463740a889a85d566599927ef34df8d525913afb16",
+      "published_sha256": "29e99d72666efdf9fc9fc0463740a889a85d566599927ef34df8d525913afb16",
+      "published_bytes": 521,
+      "transformations": []
+    },
+    {
+      "source": "test14_pre_async_marker.S",
+      "public_path": "payloads/test14_pre_async_marker.S.txt",
+      "kind": "assembly",
+      "source_sha256": "283e2a8396c745345f6abe9eb70ad7745e87fd49931ccfc2298fc9395e8400e2",
+      "published_sha256": "283e2a8396c745345f6abe9eb70ad7745e87fd49931ccfc2298fc9395e8400e2",
+      "published_bytes": 281,
+      "transformations": []
+    },
+    {
+      "source": "test15_after_async_marker.S",
+      "public_path": "payloads/test15_after_async_marker.S.txt",
+      "kind": "assembly",
+      "source_sha256": "3b333919e49a1eaefb7a58c7d69c74b9743cfc509333d77a811895464cf1d1bd",
+      "published_sha256": "3b333919e49a1eaefb7a58c7d69c74b9743cfc509333d77a811895464cf1d1bd",
+      "published_bytes": 274,
+      "transformations": []
+    },
+    {
+      "source": "test20-logging-payloads/axon-diag-test20-collect.sh",
+      "public_path": "payloads/test20-logging-payloads/axon-diag-test20-collect.sh.txt",
+      "kind": "payload",
+      "source_sha256": "00f32d09dd3e2a9629c68fd22e3c1db145ee828a1771135e4a27cc3ff6d41560",
+      "published_sha256": "00f32d09dd3e2a9629c68fd22e3c1db145ee828a1771135e4a27cc3ff6d41560",
+      "published_bytes": 6985,
+      "transformations": []
+    },
+    {
+      "source": "test20-logging-payloads/axon-diag-test20-persist.sh",
+      "public_path": "payloads/test20-logging-payloads/axon-diag-test20-persist.sh.txt",
+      "kind": "payload",
+      "source_sha256": "b64797ddae3688a1a6fc25a26996b1593ba184128f8e5fae903dd6acd76b262e",
+      "published_sha256": "cbc482377375c73e84f39e3b00aee27dd9388c5287927b462e0b19eba3aebba7",
+      "published_bytes": 3425,
+      "transformations": [
+        {
+          "kind": "private_uuid_placeholder",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "source": "test20-logging-payloads/axon-diag-test20.rc",
+      "public_path": "payloads/test20-logging-payloads/axon-diag-test20.rc.txt",
+      "kind": "payload",
+      "source_sha256": "dc39d3f3df26d3245f526a173bd7d1721fe2b5cb177ced8788c2b8164e634b75",
+      "published_sha256": "dc39d3f3df26d3245f526a173bd7d1721fe2b5cb177ced8788c2b8164e634b75",
+      "published_bytes": 438,
+      "transformations": []
+    },
+    {
+      "source": "test22-logging-payloads/system__etc__axon-diag-test20-collect.sh",
+      "public_path": "payloads/test22-logging-payloads/system__etc__axon-diag-test20-collect.sh.txt",
+      "kind": "payload",
+      "source_sha256": "42b5c0e9d24dba1195e9c556422c0d5d8df47c339bb82dcfd55b62335dc17bfe",
+      "published_sha256": "42b5c0e9d24dba1195e9c556422c0d5d8df47c339bb82dcfd55b62335dc17bfe",
+      "published_bytes": 6985,
+      "transformations": []
+    },
+    {
+      "source": "test22-logging-payloads/system__etc__axon-diag-test20-persist.sh",
+      "public_path": "payloads/test22-logging-payloads/system__etc__axon-diag-test20-persist.sh.txt",
+      "kind": "payload",
+      "source_sha256": "34082cdeba9965d2b89b9062c84debbd70d776698513bf0b075a976e3062f374",
+      "published_sha256": "89c8d8ec2c82c6e7dc2792702d412e8bcf90be387a320b1f8a6c205958705a21",
+      "published_bytes": 3425,
+      "transformations": [
+        {
+          "kind": "private_uuid_placeholder",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "source": "test22-logging-payloads/system__etc__init__axon-diag-test20.rc",
+      "public_path": "payloads/test22-logging-payloads/system__etc__init__axon-diag-test20.rc.txt",
+      "kind": "payload",
+      "source_sha256": "a50ae2ff6de6fe962a4c7688c271da3921067c8169e73d7e9e5da34a2d0a4310",
+      "published_sha256": "a50ae2ff6de6fe962a4c7688c271da3921067c8169e73d7e9e5da34a2d0a4310",
+      "published_bytes": 438,
+      "transformations": []
+    },
+    {
+      "source": "los23-system-att-gpu/manifest.json",
+      "public_path": "metadata/los23-system-att-gpu/manifest.json",
+      "kind": "metadata",
+      "source_sha256": "c890d3efcb91a600b36149a6b1a936b37789322ec9677a065c7a4e27a998b972",
+      "published_sha256": "c890d3efcb91a600b36149a6b1a936b37789322ec9677a065c7a4e27a998b972",
+      "published_bytes": 2055,
+      "transformations": []
+    },
+    {
+      "source": "test20-system-v1/manifest.json",
+      "public_path": "metadata/test20-system-v1/manifest.json",
+      "kind": "metadata",
+      "source_sha256": "865c07f33dd2bc28b1ceaa9c2b0ba5f35ac8925b6658b8bfe8f89857f74a9a3b",
+      "published_sha256": "ad9c9b363f9841cc3f2e3eab4cd39d98490559939eabe7ce9f9c8e4d517a94f9",
+      "published_bytes": 10149,
+      "transformations": [
+        {
+          "kind": "local_path_or_session_placeholder",
+          "count": 3
+        }
+      ]
+    },
+    {
+      "source": "test22-system-v1/manifest.json",
+      "public_path": "metadata/test22-system-v1/manifest.json",
+      "kind": "metadata",
+      "source_sha256": "a93ea60ec36fff5fe4a808777a65826b820f6c9b994d4b661c4fd4c909f01255",
+      "published_sha256": "a93ea60ec36fff5fe4a808777a65826b820f6c9b994d4b661c4fd4c909f01255",
+      "published_bytes": 4687,
+      "transformations": []
+    },
+    {
+      "source": "test23-system-v1/manifest.json",
+      "public_path": "metadata/test23-system-v1/manifest.json",
+      "kind": "metadata",
+      "source_sha256": "24b4c83017f8a7de864ca13cbbe7265d8985bde9e8ccbffa3123bacb78327dd9",
+      "published_sha256": "24b4c83017f8a7de864ca13cbbe7265d8985bde9e8ccbffa3123bacb78327dd9",
+      "published_bytes": 1029,
+      "transformations": []
+    },
+    {
+      "source": "test20-logging-payloads/manifest.json",
+      "public_path": "metadata/test20-logging-payloads/manifest.json",
+      "kind": "metadata",
+      "source_sha256": "4dc97b7c3be3f9cbc6f663be26ea0cc8249728fa270ad8acb514781042e34fa1",
+      "published_sha256": "836fa05e92e0c0c467cf380d46f3e3d702d855b4ee29efe22716f417680b118d",
+      "published_bytes": 1633,
+      "transformations": [
+        {
+          "kind": "local_path_or_session_placeholder",
+          "count": 3
+        }
+      ]
+    },
+    {
+      "source": "test22-logging-payloads/manifest.json",
+      "public_path": "metadata/test22-logging-payloads/manifest.json",
+      "kind": "metadata",
+      "source_sha256": "5703346aa80f38b5580932399c9b1f3e9d6f50c9566176589166a0d6e2fac35e",
+      "published_sha256": "c6cbfc7a5a2936993408994565ba4bdce9f49dd4eebfc5acea4fe63a9a93de34",
+      "published_bytes": 2887,
+      "transformations": [
+        {
+          "kind": "local_path_or_session_placeholder",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "source": "test23-system-independent-review.json",
+      "public_path": "metadata/test23-system-independent-review.json",
+      "kind": "metadata",
+      "source_sha256": "fba5901d42a39ba710f878c62dbcbe2621a652e9480d4b17bc93a996c668103d",
+      "published_sha256": "fba5901d42a39ba710f878c62dbcbe2621a652e9480d4b17bc93a996c668103d",
+      "published_bytes": 2007,
+      "transformations": []
+    },
+    {
+      "source": "test23-edl-system-independent-review.json",
+      "public_path": "metadata/test23-edl-system-independent-review.json",
+      "kind": "metadata",
+      "source_sha256": "3209d1aefae8343bebbc94026cc36ae4c8dffa74c6e2f859f1b604e6c7628e14",
+      "published_sha256": "3209d1aefae8343bebbc94026cc36ae4c8dffa74c6e2f859f1b604e6c7628e14",
+      "published_bytes": 2651,
+      "transformations": []
+    },
+    {
+      "source": "test23-reset-independent-review.json",
+      "public_path": "metadata/test23-reset-independent-review.json",
+      "kind": "metadata",
+      "source_sha256": "2916ad28895109b1c484940b1611e9698c41cde535cc700f430831fd6e1e0d03",
+      "published_sha256": "2916ad28895109b1c484940b1611e9698c41cde535cc700f430831fd6e1e0d03",
+      "published_bytes": 4513,
+      "transformations": []
+    },
+    {
+      "source": "test23-usb-port-service-independent-review.json",
+      "public_path": "metadata/test23-usb-port-service-independent-review.json",
+      "kind": "metadata",
+      "source_sha256": "ccf5ffd2a34951432c46c8d3348b247f23287041abe161ddee3fd2f81645aa07",
+      "published_sha256": "ccf5ffd2a34951432c46c8d3348b247f23287041abe161ddee3fd2f81645aa07",
+      "published_bytes": 5461,
+      "transformations": []
+    },
+    {
+      "source": "test23-android-supplement-independent-review.json",
+      "public_path": "metadata/test23-android-supplement-independent-review.json",
+      "kind": "metadata",
+      "source_sha256": "b3e6ed4e7bb5de6f5c825903c508e0afbab34699b63bc14c3eaf8ff175bd8ce8",
+      "published_sha256": "b3e6ed4e7bb5de6f5c825903c508e0afbab34699b63bc14c3eaf8ff175bd8ce8",
+      "published_bytes": 4217,
+      "transformations": []
+    },
+    {
+      "source": "test23-android-supplement-author-validation.json",
+      "public_path": "metadata/test23-android-supplement-author-validation.json",
+      "kind": "metadata",
+      "source_sha256": "76e9d1e2c6fcaa3fc524e38dc327cef62e608cbdeac7b6631bc1799f78df50cd",
+      "published_sha256": "76e9d1e2c6fcaa3fc524e38dc327cef62e608cbdeac7b6631bc1799f78df50cd",
+      "published_bytes": 1664,
+      "transformations": []
+    },
+    {
+      "source": "test22-gpu-meminfo-independent-review.json",
+      "public_path": "metadata/test22-gpu-meminfo-independent-review.json",
+      "kind": "metadata",
+      "source_sha256": "bea811071eb96c39d723e648ee63623d11361ada48c3591dfd821ab7ab24e88a",
+      "published_sha256": "bea811071eb96c39d723e648ee63623d11361ada48c3591dfd821ab7ab24e88a",
+      "published_bytes": 3842,
+      "transformations": []
+    },
+    {
+      "source": "test21-gatekeeper-independent-review.json",
+      "public_path": "metadata/test21-gatekeeper-independent-review.json",
+      "kind": "metadata",
+      "source_sha256": "217cd3bb35d4d41e48640ff2d5bb639eead60f8132f6a7b843d614795461e365",
+      "published_sha256": "217cd3bb35d4d41e48640ff2d5bb639eead60f8132f6a7b843d614795461e365",
+      "published_bytes": 1154,
+      "transformations": []
+    },
+    {
+      "source": "test22-logging-independent-review.json",
+      "public_path": "metadata/test22-logging-independent-review.json",
+      "kind": "metadata",
+      "source_sha256": "dd2647835eeb01f743e95cb0ac00c62d2882121dc8a733bb9610efa00eed55ad",
+      "published_sha256": "dd2647835eeb01f743e95cb0ac00c62d2882121dc8a733bb9610efa00eed55ad",
+      "published_bytes": 4861,
+      "transformations": []
+    },
+    {
+      "source": "test22-system-independent-review.json",
+      "public_path": "metadata/test22-system-independent-review.json",
+      "kind": "metadata",
+      "source_sha256": "e3cd6ae31fc5f0f323dcec44500933ce285da626e4c05505b8b73985fd843321",
+      "published_sha256": "e3cd6ae31fc5f0f323dcec44500933ce285da626e4c05505b8b73985fd843321",
+      "published_bytes": 3045,
+      "transformations": []
+    },
+    {
+      "source": "test22-recovery-bcb-independent-review.json",
+      "public_path": "metadata/test22-recovery-bcb-independent-review.json",
+      "kind": "metadata",
+      "source_sha256": "127e32ff9fe23dd69b82710d0440ac26bd73dc5eec8080dd5a1fdd6d20c4693b",
+      "published_sha256": "127e32ff9fe23dd69b82710d0440ac26bd73dc5eec8080dd5a1fdd6d20c4693b",
+      "published_bytes": 2333,
+      "transformations": []
+    },
+    {
+      "source": "test19-los-recovery-independent-review.json",
+      "public_path": "metadata/test19-los-recovery-independent-review.json",
+      "kind": "metadata",
+      "source_sha256": "036ae2cbc7317a2c53a4643c999632a28d4fabd5d58d5bfd6ca07f9f4c7f9db0",
+      "published_sha256": "036ae2cbc7317a2c53a4643c999632a28d4fabd5d58d5bfd6ca07f9f4c7f9db0",
+      "published_bytes": 2928,
+      "transformations": []
+    },
+    {
+      "source": "test18-cleanup-independent-review.json",
+      "public_path": "metadata/test18-cleanup-independent-review.json",
+      "kind": "metadata",
+      "source_sha256": "9c265ce7ad60a745ebcd1b35979ceac4a0dbdbc1a7c01474704e4a4d8928d0c1",
+      "published_sha256": "9c265ce7ad60a745ebcd1b35979ceac4a0dbdbc1a7c01474704e4a4d8928d0c1",
+      "published_bytes": 4640,
+      "transformations": []
+    },
+    {
+      "source": "los23-full-boot-kernel-root-review.json",
+      "public_path": "metadata/los23-full-boot-kernel-root-review.json",
+      "kind": "metadata",
+      "source_sha256": "40a302a22695cec830359585ea2fa806c70414490cb7191ae924bb1c4915e83a",
+      "published_sha256": "40a302a22695cec830359585ea2fa806c70414490cb7191ae924bb1c4915e83a",
+      "published_bytes": 220,
+      "transformations": []
+    },
+    {
+      "source": "prepared/los23-full-security-v1/manifest.json",
+      "public_path": "metadata/prepared/los23-full-security-v1/manifest.json",
+      "kind": "metadata",
+      "source_sha256": "8db8de41dee7a2acd784c1369631cc04718f71ebe8a2f0ee95bdfd48059ef865",
+      "published_sha256": "87daa46b3b19335c73fa9499bc6426ef383d9ba6539bee7680f2060b3c9b6e7b",
+      "published_bytes": 3384,
+      "transformations": [
+        {
+          "kind": "local_path_or_session_placeholder",
+          "count": 3
+        }
+      ]
+    },
+    {
+      "source": "prepared/test21-gatekeeper-v1/manifest.json",
+      "public_path": "metadata/prepared/test21-gatekeeper-v1/manifest.json",
+      "kind": "metadata",
+      "source_sha256": "0468e69ece62151b7021aee7b5a0a5a7f88bbd32a8aff14163c4679e5376dfa9",
+      "published_sha256": "0468e69ece62151b7021aee7b5a0a5a7f88bbd32a8aff14163c4679e5376dfa9",
+      "published_bytes": 2275,
+      "transformations": []
+    },
+    {
+      "source": "prepared/test22-gatekeeper-service-v1/manifest.json",
+      "public_path": "metadata/prepared/test22-gatekeeper-service-v1/manifest.json",
+      "kind": "metadata",
+      "source_sha256": "692bd41dcc2cf7161e073c225533ce5ce25e21b0a1a82ea0394b40b9284e5b5d",
+      "published_sha256": "1bde9db568808a8fa39fbed33272761c328a85252fcc204e400628b46b0166d3",
+      "published_bytes": 24030,
+      "transformations": [
+        {
+          "kind": "local_path_or_session_placeholder",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "source": "prepared/test22-gpu-meminfo-v1/manifest.json",
+      "public_path": "metadata/prepared/test22-gpu-meminfo-v1/manifest.json",
+      "kind": "metadata",
+      "source_sha256": "833b9e62c879f6ac3838957e7b1f1b251c27461d4b20131ddef733ffc4dd2a8f",
+      "published_sha256": "833b9e62c879f6ac3838957e7b1f1b251c27461d4b20131ddef733ffc4dd2a8f",
+      "published_bytes": 2750,
+      "transformations": []
+    },
+    {
+      "source": "prepared/test23-usb-port-service-v1/manifest.json",
+      "public_path": "metadata/prepared/test23-usb-port-service-v1/manifest.json",
+      "kind": "metadata",
+      "source_sha256": "194f04854120c36946a780c3adc5a07f46b22cbaca8165c6865b4aa1956d9b09",
+      "published_sha256": "194f04854120c36946a780c3adc5a07f46b22cbaca8165c6865b4aa1956d9b09",
+      "published_bytes": 1622,
+      "transformations": []
+    }
+  ]
+}

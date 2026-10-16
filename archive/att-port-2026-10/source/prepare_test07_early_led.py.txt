@@ -1,0 +1,221 @@
+#!/usr/bin/env python3
+"""Move the existing QPNP RGB marker to the start of device initcalls.
+
+No phone access. Rotate existing pointers; preserve every other initcall's
+relative order and execute every entry exactly once. The original pointer
+labels in System.map describe the input, not the reordered output table.
+"""
+from collections import Counter
+import gzip
+import hashlib
+import json
+import os
+from pathlib import Path
+import struct
+import sys
+
+ROOT = Path(__file__).resolve().parent
+sys.path.insert(0, str(ROOT.parent / 'ZTE-Axon-M-Flash-Tool/scripts'))
+from fujisan_image import BootImage, gzip_member, kernel_dtbs, report, sign_image
+
+SOURCE_SHA = '2bdf23078453af1eaca576b3f89fcd5875200c935cc8778219399a8bad558700'
+RAW_SHA = '1aac4cf131ffd28f2b7c1f9049ebf2fa8cf1fa1a7905de037b92bd1c3a06946a'
+MAP_SHA = '532606e92b85d81d98786af6263d03747bf2644705fb794df5614b96add386d0'
+CALLS_SHA = '65f46191b61bbc8fcd475ce3c16d4bd7d0fe71bb4b3a564829856ec1446872eb'
+IMAGE_BASE = 0xffffff8008080000
+LEVEL6 = 0xffffff80097cbe28
+LEVEL7 = 0xffffff80097cd158
+END = 0xffffff80097cd3b8
+LED_TARGET = 0xffffff800979cfac
+LED_INDEX = 375  # zero based; originally the 376th level-6 initcall
+DEPENDENCIES = {
+    '__initcall_spmi_init2': 'spmi_init',
+    '__initcall_pmic_spmi_init3': 'pmic_spmi_init',
+    '__initcall_spmi_pmic_arb_init3': 'spmi_pmic_arb_init',
+    '__initcall_pwm_sysfs_init4': 'pwm_sysfs_init',
+    '__initcall_qpnp_lpg_init4': 'qpnp_lpg_init',
+    '__initcall_leds_init4': 'leds_init',
+    '__initcall_qpnp_revid_init4': 'qpnp_revid_init',
+}
+LED_PATH = ('soc', 'qcom,spmi@400f000', 'qcom,pmi8994@3',
+            'qcom,leds@d000', 'qcom,rgb_2')
+
+
+def sha(data):
+    return hashlib.sha256(data).hexdigest()
+
+
+def nodes(node, path=''):
+    path += '/' + node.name
+    yield path, node
+    for child in node.children:
+        yield from nodes(child, path)
+
+
+def guard_table(raw, map_data, calls_data):
+    if sha(map_data) != MAP_SHA or sha(calls_data) != CALLS_SHA:
+        raise ValueError('Recovered symbol/table metadata changed')
+    symbols = {}
+    for line in map_data.decode().splitlines():
+        address, kind, name = line.split(maxsplit=2)
+        symbols.setdefault(name, []).append(int(address, 16))
+
+    def unique(name):
+        addresses = symbols.get(name, [])
+        if len(addresses) != 1:
+            raise ValueError('Expected unique symbol: ' + name)
+        return addresses[0]
+
+    for name, expected in (('__initcall6_start', LEVEL6),
+                           ('__initcall7_start', LEVEL7),
+                           ('__initcall_end', END),
+                           ('qpnp_led_init', LED_TARGET)):
+        if unique(name) != expected:
+            raise ValueError('Unexpected symbol boundary or LED address')
+    rows = json.loads(calls_data)
+    if len(rows) != 690 or (LEVEL7 - LEVEL6) // 8 != 614:
+        raise ValueError('Unexpected initcall count')
+    pointers = []
+    for index, row in enumerate(rows):
+        address = LEVEL6 + index * 8
+        offset = address - IMAGE_BASE
+        target, = struct.unpack_from('<Q', raw, offset)
+        if (row['level'] != (6 if index < 614 else 7)
+                or int(row['pointer_address'], 16) != address
+                or int(row['pointer_file_offset'], 16) != offset
+                or int(row['function_address'], 16) != target
+                or target not in symbols.get(row['function_verified'], [])):
+            raise ValueError('Exact initcall pointer verification failed')
+        pointers.append(target)
+    if (rows[LED_INDEX]['function_verified'] != 'qpnp_led_init'
+            or rows[LED_INDEX]['sync']
+            or pointers[LED_INDEX] != LED_TARGET
+            or pointers.count(LED_TARGET) != 1
+            or any(row['sync'] for row in rows[:LED_INDEX + 1])):
+        raise ValueError('LED entry is missing, duplicate, or crosses sync group')
+    dependencies = []
+    for pointer_name, function_name in DEPENDENCIES.items():
+        address = unique(pointer_name)
+        target = unique(function_name)
+        if address >= LEVEL6 or struct.unpack_from('<Q', raw, address - IMAGE_BASE)[0] != target:
+            raise ValueError('LED dependency is not a verified earlier initcall')
+        dependencies.append({'pointer_symbol': pointer_name,
+                             'function': function_name,
+                             'pointer_file_offset': hex(address - IMAGE_BASE),
+                             'function_address': hex(target)})
+    return pointers, dependencies
+
+
+def main():
+    os.umask(0o077)
+    source = ROOT / 'prepared/test-05-qce-disabled-boot.img'
+    target = ROOT / 'prepared/test-07-early-blue-led-boot.img'
+    outputs = [target, target.with_suffix('.validation.json'), target.with_suffix('.img.json')]
+    if any(path.exists() for path in outputs):
+        raise FileExistsError('Refusing to overwrite a diagnostic artifact')
+    data = source.read_bytes()
+    if sha(data) != SOURCE_SHA:
+        raise ValueError('Source differs from verified test 05')
+    original_info = report(data)
+    boot = BootImage(data)
+    if original_info['signature_target'] != '/boot' or not boot.id_valid:
+        raise ValueError('Source is not a valid signed boot image')
+    _, raw, dt_tail = gzip_member(boot.kernel)
+    if sha(raw) != RAW_SHA:
+        raise ValueError('Exact source kernel guard failed')
+    analysis = ROOT / 'kernel-analysis'
+    pointers, dependencies = guard_table(
+        raw, (analysis / 'twrp-3.7.0.System.map').read_bytes(),
+        (analysis / 'twrp-3.7.0.initcalls.json').read_bytes())
+    hardware = []
+    _, _, trees = kernel_dtbs(boot.kernel)
+    if len(trees) != 2:
+        raise ValueError('Expected both DT variants')
+    for index, (blob, tree) in enumerate(trees):
+        node = tree.root
+        for component in LED_PATH:
+            node = node.child(component) if node else None
+        if (node is None or node.props.get('linux,name') != b'blue\0'
+                or node.props.get('qcom,id') != struct.pack('>I', 5)
+                or node.props.get('qcom,default-state') != b'on\0'
+                or len(node.props.get('pwms', b'')) != 12):
+            raise ValueError('Expected existing blue RGB marker')
+        handle = node.props['pwms'][:4]
+        matches = [(path, item) for path, item in nodes(tree.root)
+                   if item.props.get('phandle', item.props.get('linux,phandle')) == handle]
+        if len(matches) != 1:
+            raise ValueError('Blue PWM phandle did not resolve uniquely')
+        path, pwm = matches[0]
+        if (not path.endswith('/qcom,pmi8994@3/pwm@b100')
+                or pwm.props.get('compatible') != b'qcom,qpnp-pwm\0'
+                or pwm.props.get('status', b'okay\0') not in (b'ok\0', b'okay\0')
+                or pwm.props.get('reg') != bytes.fromhex('0000b100000001000000b0420000007e')):
+            raise ValueError('Unexpected blue PWM hardware or availability')
+        hardware.append({'dt_index': index, 'dt_sha256': sha(blob),
+                         'blue_id': 5, 'pwm_phandle_hex': handle.hex(),
+                         'pwm_path': path, 'pwm_reg_hex': pwm.props['reg'].hex()})
+
+    # Rotate only the ordinary level-6 prefix. No insertion, duplication,
+    # omission, null pointer, executable-code edit, or sync-level crossing.
+    rotated = [pointers[LED_INDEX]] + pointers[:LED_INDEX] + pointers[LED_INDEX + 1:]
+    if (Counter(rotated) != Counter(pointers)
+            or rotated[1:LED_INDEX + 1] != pointers[:LED_INDEX]
+            or rotated[LED_INDEX + 1:] != pointers[LED_INDEX + 1:]):
+        raise ValueError('Initcall permutation/order invariant failed')
+    start = LEVEL6 - IMAGE_BASE
+    stop = start + (LED_INDEX + 1) * 8
+    replacement = struct.pack('<' + 'Q' * (LED_INDEX + 1), *rotated[:LED_INDEX + 1])
+    patched = raw[:start] + replacement + raw[stop:]
+    changes = [i for i, (before, after) in enumerate(zip(raw, patched)) if before != after]
+    if (len(raw) != len(patched) or not changes
+            or any(not start <= offset < stop for offset in changes)
+            or patched[:start] != raw[:start] or patched[stop:] != raw[stop:]
+            or list(struct.unpack_from('<690Q', patched, start)) != rotated):
+        raise ValueError('Unexpected raw-kernel difference or pointer result')
+    signed = sign_image(boot.rebuild(kernel=gzip.compress(patched, compresslevel=9, mtime=0) + dt_tail),
+                        '/boot', str(ROOT / 'keys/axon-m-local.key'),
+                        str(ROOT / 'keys/axon-m-local.pem'))
+    rebuilt = BootImage(signed)
+    _, checked_raw, checked_dt = gzip_member(rebuilt.kernel)
+    if (checked_raw != patched or checked_dt != dt_tail
+            or rebuilt.ramdisk != boot.ramdisk or rebuilt.second != boot.second
+            or rebuilt.cmdline != boot.cmdline):
+        raise ValueError('Unintended kernel/DT/ramdisk/command-line change')
+    info = report(signed)
+    if (not info['signature_verified'] or info['signature_target'] != '/boot'
+            or not info['boot_id_valid'] or len(boot.cmdline.encode()) > 511):
+        raise ValueError('Output validation failed')
+    v = dict(
+        source_image=source.name, source_sha256=SOURCE_SHA,
+        image=target.name, image_bytes=len(signed), image_sha256=sha(signed),
+        padded_sha256=sha(signed + b'\0' * (-len(signed) % 512)),
+        original_raw_kernel_sha256=RAW_SHA, patched_raw_kernel_sha256=sha(patched),
+        raw_kernel_bytes=len(patched), raw_changed_byte_count=len(changes),
+        raw_changed_offsets=changes,
+        permitted_raw_interval={'start_inclusive': hex(start), 'end_exclusive': hex(stop)},
+        initcall_count=690, level6_count=614, level7_count=76,
+        moved_function='qpnp_led_init', moved_function_address=hex(LED_TARGET),
+        old_level6_index_zero_based=LED_INDEX, new_level6_index_zero_based=0,
+        original_pointer_file_offset=hex(start + LED_INDEX * 8),
+        new_pointer_file_offset=hex(start),
+        every_initcall_preserved_once=True, other_initcall_relative_order_preserved=True,
+        all_level7_and_level6_sync_pointers_unchanged=True,
+        code_bytes_unchanged=True, qsee_failed_probe_instruction_preserved=True,
+        appended_dtbs_unchanged=True, ramdisk_unchanged=True, cmdline_unchanged=True,
+        cmdline_bytes=len(boot.cmdline.encode()), dependencies=dependencies,
+        blue_hardware=hardware, signature_verified=True, boot_id_valid=True,
+        hardware_tested=False,
+        interpretation='A new blue transition after starting this image supports reaching the beginning of level 6 and running the RGB probe. Absence remains inconclusive: earlier stop or failed/deferred LED/PWM probe. A persistent LED from an earlier boot is not fresh evidence.',
+        map_caveat='Original System.map initcall DATA labels describe input positions; function addresses and blacklist names are unchanged. Use this permutation record for output pointer positions.',
+    )
+    for path, contents in ((target, signed),
+                           (outputs[1], (json.dumps(v, indent=2) + '\n').encode()),
+                           (outputs[2], (json.dumps(info, indent=2) + '\n').encode())):
+        with path.open('xb') as stream:
+            stream.write(contents)
+    summary = {key: value for key, value in v.items() if key != 'raw_changed_offsets'}
+    print(json.dumps(summary, indent=2))
+
+
+if __name__ == '__main__':
+    main()

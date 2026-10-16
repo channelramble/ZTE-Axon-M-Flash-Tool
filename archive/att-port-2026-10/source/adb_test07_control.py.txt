@@ -1,0 +1,130 @@
+#!/usr/bin/env python3
+"""Prepare or write only the exact reviewed Test 07 adb-only boot candidate.
+
+Default is files-only. --execute permits one fixed boot write from the current
+3.18 TWRP. Reuses the reviewed full-partition transaction and never reboots.
+The exact candidate is immutable here: a plan cannot authorize another hash.
+"""
+import argparse
+import json
+import os
+from pathlib import Path
+import signal
+import sys
+
+import adb_boot_usb_control as transaction
+from adb_boot_usb_control import (BootImage, CURRENT_RECOVERY_SHA, PARTITION_BYTES,
+                                  SECTOR, TRANSACTION_TIMEOUT, digest, pinned_file,
+                                  original_backups, report)
+
+IMAGE_BYTES = 26178611
+IMAGE_SHA = '1d46cae5a75550e5bd0ddd162c52f9288362fe1a09a93f18e522392de831bee7'
+PADDED_BYTES = 26179072
+PADDED_SHA = '7c0e17dab08fda39cdff76cd928c07ed0cda6f992c9feff5f981ad487287592b'
+CURRENT_BOOT_SHA = '95e32aa952517640df1b0607bf6dbe16d3daed7e79062d2e4473ab445cb26a7a'
+OUTPUT_NAME = 'test07-early-blue-led-adb-only'
+DEPENDENCIES = {
+    'adb_boot_usb_control.py': '4ea10347ffe127b0ab9dbce2428986ab31b598a673abd3dc4b4234bbd8b315ae',
+    'adb_recovery_control.py': '51faf33fe6df0b24ade644bf5c23c6131811ebe9bb077ce39f2d20142fac41ee',
+}
+
+
+def verify_dependencies():
+    root = Path(__file__).resolve().parent
+    for name, expected in DEPENDENCIES.items():
+        if digest((root / name).read_bytes()) != expected:
+            raise ValueError('Reviewed transaction dependency changed: ' + name)
+
+
+def exact_inputs(image, padded, primary, current_boot, current_recovery):
+    for label, data, length, expected in (
+            ('Test 07 image', image, IMAGE_BYTES, IMAGE_SHA),
+            ('Test 07 sector-padded image', padded, PADDED_BYTES, PADDED_SHA),
+            ('Current full boot', current_boot, PARTITION_BYTES, CURRENT_BOOT_SHA),
+            ('Current full recovery', current_recovery, PARTITION_BYTES, CURRENT_RECOVERY_SHA),
+            ('Original GPT', primary, *transaction.BACKUPS['gpt_main0.bin'])):
+        if len(data) != length or digest(data) != expected:
+            raise ValueError(label + ' differs from its immutable length/hash pin')
+    if padded != image + b'\0' * (-len(image) % SECTOR):
+        raise ValueError('Candidate sector padding differs')
+
+
+def load_plan(path):
+    verify_dependencies()
+    plan = json.loads(Path(path).read_text())
+    required = {'partition', 'image', 'image_sha256', 'backups',
+                'current_boot', 'current_recovery', 'output'}
+    if not required <= set(plan) or set(plan) - required - {'adb'}:
+        raise ValueError('Unexpected or missing Test 07 plan fields')
+    if plan['partition'] != 'boot' or plan['image_sha256'] != IMAGE_SHA:
+        raise ValueError('Only the exact pinned Test 07 boot candidate is permitted')
+    for field in required - {'partition', 'image_sha256'}:
+        if not isinstance(plan[field], str) or not Path(plan[field]).is_absolute():
+            raise ValueError(field + ' must be an absolute path')
+    if Path(plan['output']).name != OUTPUT_NAME:
+        raise ValueError('Test 07 requires its separate immutable evidence directory name')
+    expected_adb = Path.home() / transaction.base.ADB_RELATIVE
+    if 'adb' in plan and Path(plan['adb']) != expected_adb:
+        raise ValueError('Only the separately installed adb 29.0.6 is permitted')
+    plan['adb'] = str(expected_adb)
+    primary = original_backups(plan['backups'])
+    current_boot = pinned_file(plan['current_boot'], PARTITION_BYTES, CURRENT_BOOT_SHA,
+                               'Current adb-only reader full boot backup')
+    current_recovery = pinned_file(plan['current_recovery'], PARTITION_BYTES,
+                                   CURRENT_RECOVERY_SHA, 'Current marked recovery full backup')
+    image = pinned_file(plan['image'], IMAGE_BYTES, IMAGE_SHA, 'Exact Test 07 image')
+    padded = image + b'\0' * (-len(image) % SECTOR)
+    exact_inputs(image, padded, primary, current_boot, current_recovery)
+    info, boot = report(image), BootImage(image)
+    if (not info['signature_verified'] or info['signature_target'] != '/boot'
+            or not boot.id_valid or len(image) != boot.payload_length + info['signature_bytes']):
+        raise ValueError('Expected a valid exact-length /boot-signed Test 07 image')
+    if not (info['kernel_version'] or '').startswith('Linux version 4.4.302-fujisan+'):
+        raise ValueError('Unexpected Test 07 kernel version')
+    return plan, image, padded, primary, current_boot, current_recovery
+
+
+def execute(plan, image, padded, primary, current_boot, current_recovery,
+            client_factory=transaction.AdbBootUSB):
+    verify_dependencies()
+    exact_inputs(image, padded, primary, current_boot, current_recovery)
+    if (plan['partition'] != 'boot' or plan['image_sha256'] != IMAGE_SHA
+            or Path(plan['output']).name != OUTPUT_NAME):
+        raise ValueError('Execution plan does not name the exact Test 07 transaction')
+    return transaction.execute(plan, image, padded, primary, current_boot, current_recovery,
+                               client_factory=client_factory)
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('plan', type=Path)
+    parser.add_argument('--execute', action='store_true')
+    args = parser.parse_args(argv)
+    os.umask(0o077)
+    values = load_plan(args.plan)
+    print(json.dumps({'file_preflight_passed': True, 'partition': 'boot',
+                      'image_sha256': IMAGE_SHA, 'image_bytes': IMAGE_BYTES,
+                      'padded_sha256': PADDED_SHA, 'write_sectors': PADDED_BYTES // SECTOR,
+                      'current_full_boot_sha256': CURRENT_BOOT_SHA,
+                      'current_full_recovery_sha256': CURRENT_RECOVERY_SHA,
+                      'execute': args.execute, 'reset_sent': False}), flush=True)
+    if args.execute:
+        def alarm(signum, frame):
+            raise TimeoutError('Whole transaction deadline reached; no retry or reboot')
+        previous = signal.signal(signal.SIGALRM, alarm)
+        signal.alarm(TRANSACTION_TIMEOUT)
+        try:
+            print(json.dumps(execute(*values)), flush=True)
+        finally:
+            signal.alarm(0)
+            signal.signal(signal.SIGALRM, previous)
+    return 0
+
+
+if __name__ == '__main__':
+    try:
+        sys.exit(main())
+    except Exception as exc:
+        print(json.dumps({'error': type(exc).__name__ + ': ' + str(exc),
+                          'reset_sent': False}), file=sys.stderr)
+        sys.exit(1)

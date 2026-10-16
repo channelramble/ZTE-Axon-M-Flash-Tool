@@ -1,0 +1,37 @@
+{
+  "passed": true,
+  "image_sha256": "33db1d4d4e5e49f5dc1c06cbd6a0e39b07fd9b6d886941e33f165b7876fccc5a",
+  "manifest_sha256": "24b4c83017f8a7de864ca13cbbe7265d8985bde9e8ccbffa3123bacb78327dd9",
+  "builder_sha256": "2e3babd98e129a2845fcbe0fd5b7a29a423a4c5e6ba2e08c2b66b1694f72e123",
+  "component_builder_sha256": "833cf168762bb17455005f019f9237bedf4046470764b743fa6b5b13147feee3",
+  "delta_sha256": "8fcfb957f737c58e3510a0d87150121a0805eaa59560ab955b5aa136c9af142b",
+  "checks": {
+    "fixed_image_and_source_pins": true,
+    "only_declared_rc_payload": true,
+    "candidate_same_size_and_89_differences": true,
+    "full_inode_stat_xattr_extents_exact": true,
+    "native_hal_hash_unchanged": true,
+    "target_inode_physical_block": true,
+    "exact_delta_scope": true,
+    "whole_delta_block_verified": true,
+    "same_block_slack_unchanged": true,
+    "unchanged_/system/etc/init/hw/init.rc": true,
+    "unchanged_/system/etc/init/hw/init.usb.rc": true,
+    "unchanged_/system/etc/init/hw/init.usb.configfs.rc": true,
+    "unchanged_/vendor/etc/init/hw/init.msm.usb.configfs.rc": true,
+    "unchanged_/system/etc/axon-diag-test20-collect.sh": true,
+    "unchanged_/system/etc/axon-diag-test20-persist.sh": true,
+    "unchanged_/system/etc/init/axon-diag-test20.rc": true,
+    "builder_verification_receipts": true,
+    "independent_full_output_sha": true
+  },
+  "builder_review": "Fixed exact source/target native and RC pins; APFS clone; same-size one-block write; full source/candidate comparison outside approvedblock; full inode stat equality; read-only fsck; rehashed source; no device operations. No material issue found.",
+  "not_repeated": [
+    "Full outside-patch byte comparison and read-only fsck; builder source/receipts reviewed instead"
+  ],
+  "limits": [
+    "Runtime logging names remain Test22; old cache archives are previous boot and must not be represented as new evidence",
+    "No device test performed; other HAL/framework failures may remain"
+  ],
+  "phone_operations": false
+}

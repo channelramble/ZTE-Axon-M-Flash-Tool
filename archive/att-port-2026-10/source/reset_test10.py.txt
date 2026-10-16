@@ -1,0 +1,91 @@
+#!/usr/bin/env python3
+"""One Firehose reset of Test10 after full readback verification on both Macs."""
+import hashlib
+import json
+import os
+from pathlib import Path
+import subprocess
+import time
+import usb.core
+
+from firehose_read import Reader
+from firehose_boot_test import save_state
+
+ROOT = Path(__file__).resolve().parent
+IMAGE_SHA = 'b62156cff1a0ddf4c7bb126f19f0b4f9f97c80bfcb0202524cc773a4285b8cac'
+FULL_SHA = '624418846d1055db5157cbf5e087359b4e6165b035174b0dd6d236ca10c1f657'
+
+
+def main():
+    os.umask(0o077)
+    audit_root = ROOT / 'test10-after-deferred-green-full-after'
+    audit = json.loads((audit_root / 'audit.json').read_text())
+    receipt = json.loads((audit_root / 'local-readback-verification.json').read_text())
+    transaction = json.loads((ROOT / 'test10-after-deferred-green-led/transaction.json').read_text())
+    if (audit['phase'] != 'complete' or not audit['all_verified']
+            or not receipt['full_readback_verified_on_both_macs']
+            or receipt['full_boot_sha256'] != FULL_SHA
+            or not transaction['program_ack'] or not transaction['readback_verified']
+            or transaction['image_sha256'] != IMAGE_SHA):
+        raise ValueError('Missing full two-Mac readback verification')
+    for name, expected in (
+            ('boot', FULL_SHA),
+            ('recovery', '29b5052e639b46c2ea08c2cbdae59ecbb2e4a38b97f7b4e703019db83434cff8'),
+            ('misc', '30e14955ebf1352266dc2ff8067e68104607e750abb9d3b36582b8af909fcb58')):
+        if hashlib.sha256((audit_root / (name + '.bin')).read_bytes()).hexdigest() != expected:
+            raise ValueError('Full readback changed: ' + name)
+    image = (ROOT / 'test-10-after-deferred-green-boot-adb-only.img').read_bytes()
+    if (hashlib.sha256(image).hexdigest() != IMAGE_SHA
+            or (audit_root / 'boot.bin').read_bytes()[:len(image)] != image):
+        raise ValueError('Pinned image/readback mismatch')
+    out = ROOT / 'test10-after-deferred-green-reset'
+    out.mkdir(mode=0o700, exist_ok=False)
+    state_path = out / 'reset-result.json'
+    state = {'reset_attempted': False, 'reset_sent': False, 'reset_ack': False,
+             'edl_disappearance_observed': False, 'usb_observations': []}
+    save_state(state_path, state)
+    with (out / 'reset.xml.log').open('xb') as log:
+        c = Reader(log)
+        try:
+            c.configure()
+            encoded = b'<?xml version="1.0" ?><data><power value="reset"/></data>'
+            log.write(b'TX ' + encoded + b'\n'); log.flush()
+            state['reset_attempted'] = True
+            save_state(state_path, state)
+            try:
+                if c.ep_out.write(encoded, timeout=3000) != len(encoded):
+                    raise RuntimeError('Short reset XML transfer; no retry')
+                state['reset_sent'] = True
+                save_state(state_path, state)
+                c.response(timeout=5)
+                state['reset_ack'] = True
+            except Exception as exc:
+                state['response_note'] = type(exc).__name__ + ': ' + str(exc)
+            save_state(state_path, state)
+        finally:
+            c.close()
+    print(json.dumps({k:v for k,v in state.items() if k != 'usb_observations'}), flush=True)
+    adb = Path.home() / '.local/share/axon-m-edl/platform-tools-29.0.6/adb'
+    start, last = time.monotonic(), None
+    while time.monotonic() - start < 40:
+        count = len(list(usb.core.find(find_all=True, idVendor=0x05c6, idProduct=0x9008)))
+        result = subprocess.run([str(adb), '-P', '5038', 'devices'], capture_output=True, timeout=10)
+        states = [line.split()[1] for line in result.stdout.decode(errors='replace').splitlines()[1:]
+                  if len(line.split()) >= 2]
+        item = {'elapsed_seconds': round(time.monotonic() - start, 1),
+                'edl_devices': count, 'adb_states': states}
+        state['usb_observations'].append(item)
+        state['edl_disappearance_observed'] |= count == 0
+        save_state(state_path, state)
+        if (count, states) != last:
+            print(json.dumps(item), flush=True)
+            last = count, states
+        if states:
+            break
+        time.sleep(2)
+    print(json.dumps({'edl_disappearance_observed': state['edl_disappearance_observed'],
+                      'last_observation': state['usb_observations'][-1]}), flush=True)
+
+
+if __name__ == '__main__':
+    main()

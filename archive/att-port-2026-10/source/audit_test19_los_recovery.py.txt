@@ -1,0 +1,165 @@
+#!/usr/bin/env python3
+"""Independent, local-only audit of the immutable final Test19 artifact."""
+from pathlib import Path
+import gzip
+import hashlib
+import json
+import os
+import re
+import subprocess
+import sys
+
+ROOT = Path(__file__).resolve().parent
+sys.path.insert(0, str(ROOT.parent/'ZTE-Axon-M-Flash-Tool/scripts'))
+from fujisan_image import BootImage, cpio_entries, kernel_dtbs, report
+
+SHA = lambda data: hashlib.sha256(data).hexdigest()
+SOURCE_SHA = '5d76032e77d24a364bfd733369470abd516c198e8217c590d286dc16ab527a5a'
+IMAGE_SHA = '7464779eaa501e58b9b1b78b09676786c98e154de6631f82f8d2bc8a37d1ed46'
+CPIO_SHA = 'be30850f2a904535803d21366e226a5ebcdd0358f1430829c7082d494f1b96d2'
+
+
+def require(condition, message):
+    if not condition:
+        raise ValueError(message)
+
+
+def tree_props(node, path=''):
+    current = path+'/'+node.name if node.name else ''
+    result = {current or '/': dict(node.props)}
+    for child in node.children:
+        result.update(tree_props(child, current))
+    return result
+
+
+def main():
+    os.umask(0o077)
+    output = ROOT/'test19-los-recovery-independent-review.json'
+    require(not output.exists() and not output.is_symlink(), 'Review already exists')
+    source = (ROOT/'recovery-lineage-23.2-20261006-UNOFFICIAL-fujisan.img').read_bytes()
+    data = (ROOT/'prepared/test-19-los-recovery-boot-adb-only.img').read_bytes()
+    require(SHA(source) == SOURCE_SHA and SHA(data) == IMAGE_SHA, 'Exact source/final image required')
+    old, new = BootImage(source), BootImage(data)
+    info = report(data)
+    require(info['signature_verified'] and info['boot_id_valid'] and info['signature_target'] == '/boot',
+            'Signature, target or boot ID invalid')
+    require(len(data) == new.payload_length+info['signature_bytes'], 'Extra image suffix')
+    require(old.second == new.second and
+            old.rebuild(kernel=new.kernel, ramdisk=new.ramdisk, cmdline=new.cmdline) == new.payload,
+            'Unexpected header, address or second-section changes')
+    _, raw0, dt0 = kernel_dtbs(old.kernel)
+    _, raw1, dt1 = kernel_dtbs(new.kernel)
+    require(SHA(raw0) == 'd1792237ae69783c646ab25ad94d439c4ad43d76a63bed37164950df4db52def',
+            'Wrong LOS kernel')
+    require(raw0[0x672ca0:0x672ca4] == bytes.fromhex('16efff97'), 'Wrong original QSEE call')
+    require(raw1 == raw0[:0x672ca0]+bytes.fromhex('40028012')+raw0[0x672ca4:],
+            'Unexpected kernel patch scope')
+    require(SHA(raw1) == '0c14d626fcd2ea4e35895b0db4801d3b5aaf150a62806c7a90fcb4ee9a5accaa',
+            'Wrong patched kernel hash')
+    require(raw0[0x17be8f8:0x17c07d8] == raw1[0x17be8f8:0x17c07d8], 'Initcall table differs')
+    require(len(dt0) == len(dt1) == 2, 'Unexpected DT count')
+    dt_checks = []
+    for index, ((b0, t0), (b1, t1)) in enumerate(zip(dt0, dt1)):
+        a, b = tree_props(t0.root), tree_props(t1.root)
+        added = '/reserved-memory/ap_share_region@9ff00000'
+        require(set(b)-set(a) == {added} and not set(a)-set(b), 'Unexpected DT nodes')
+        require(b[added] == {'reg':bytes.fromhex('000000009ff000000000000000100000'), 'no-map':b''},
+                'Wrong AT&T memory reservation')
+        expected = {('/soc/qcrypto@660000','status'):b'disabled\0',
+                    ('/soc/qcedev@660000','status'):b'disabled\0',
+                    ('/soc/ssusb@6a00000','extcon'):b'\0'*4}
+        delta = {(path, prop):b[path].get(prop) for path in a
+                 for prop in a[path].keys() | b[path].keys() if a[path].get(prop) != b[path].get(prop)}
+        require(delta == expected, 'Unexpected semantic DT properties')
+        require(t1.free_tail == 8192 and t1.reserve == t0.reserve and t1.bootcpu == t0.bootcpu and
+                t1.last == t0.last, 'Unexpected DT metadata')
+        dt_checks.append(dict(index=index, source_sha256=SHA(b0), target_sha256=SHA(b1), semantic_scope_valid=True))
+
+    cpio = gzip.decompress(new.ramdisk)
+    require(SHA(cpio) == CPIO_SHA and cpio == (ROOT/'prepared/test-19-los-recovery-ramdisk-v2.cpio').read_bytes(),
+            'Final ramdisk differs from independently reviewed v2 CPIO')
+    olist, nlist = cpio_entries(gzip.decompress(old.ramdisk)), cpio_entries(cpio)
+    o, n = {e[0]:e for e in olist}, {e[0]:e for e in nlist}
+    changed = {'init.recovery.qcom.rc','prop.default','system/bin/init',
+               'system/etc/init/hw/init.rc','system/etc/recovery.fstab'}
+    added = {'system/bin/axon-diag-collect.sh','system/bin/axon-diag-persist.sh'}
+    require(len(olist) == 593 and len(nlist) == 595 and set(n)-set(o) == added and
+            {name for name in o if o[name] != n[name]} == changed, 'Unexpected CPIO scope')
+    require([e[0] for e in nlist if e[0] in o] == [e[0] for e in olist], 'Member order changed')
+    for name in changed:
+        f, g = list(o[name][1]), list(n[name][1]); f[6] = g[6]
+        if o[name][3][:6] == b'070702': f[12] = g[12]
+        require(f == g, 'Unexpected CPIO metadata: '+name)
+    i0, i1 = o['system/bin/init'][2], n['system/bin/init'][2]
+    require(SHA(i0) == '58b17089c9ccd12f43c3b263d12b4204015bd92a14643ece08d51a69cff07d70' and
+            SHA(i1) == '714ecace1ad409d588f497d51c738cf0bdb0a1d23ee3029c5b976db5f0e468eb', 'Wrong init binaries')
+    require(len(i0) == len(i1) and [i for i,(a,b) in enumerate(zip(i0,i1)) if a != b] == [0xfc079,0xfc080],
+            'Unexpected init patch scope')
+    prop = n['prop.default'][2]
+    for key, expected in ((b'ro.debuggable',[b'1']), (b'ro.secure',[b'0']),
+                          (b'ro.adb.secure',[b'0',b'0']), (b'ro.build.type',[b'user',b'user'])):
+        require(re.findall(rb'(?m)^'+re.escape(key)+rb'=(.*)$',prop) == expected, 'Wrong diagnostic properties')
+    initrc, qcom = n['system/etc/init/hw/init.rc'][2], n['init.recovery.qcom.rc'][2]
+    require(b'on charger\n    trigger late-init\n' in initrc and
+            b'service charger /system/bin/charger\n    disabled\n' in initrc and
+            b'service recovery /system/bin/recovery --show_text --reason=axon-diag-test19\n' in initrc,
+            'Wrong charger/recovery startup')
+    require(b'on post-fs\n    setprop sys.usb.config adb\n' in initrc and
+            b'on property:sys.usb.config=adb && property:sys.usb.ffs.ready=1 && property:sys.usb.configfs=1\n' in initrc and
+            b'write /sys/devices/soc/6a00000.ssusb/mode peripheral' in qcom,
+            'Wrong peripheral/adb readiness actions')
+    require(b'wait /sys/class/graphics/fb0/blank' not in qcom and
+            b'wait /sys/module/zte_touch_expand/parameters/separate_inputs' not in qcom,
+            'Early display waits remain')
+    # ueventd's unchanged /dev/mtp_usb permissions do not activate a gadget.
+    require(all(b'mtp' not in e[2].lower() for e in nlist
+                if e[0].endswith('.rc') and 'ueventd' not in e[0]), 'MTP init action present')
+    fstab = n['system/etc/recovery.fstab'][2]
+    for line in fstab.splitlines():
+        fields = line.split()
+        if fields and not fields[0].startswith(b'#'):
+            require(fields[1] not in (b'/cache',b'/data',b'/persist',b'/dcmlog'), 'Isolated filesystem retained')
+    for name in added:
+        require(subprocess.run(['/bin/sh','-n'],input=n[name][2],capture_output=True).returncode == 0,
+                'Script syntax rejected')
+    require(subprocess.run(['/usr/bin/cpio','-it'],input=cpio,capture_output=True).returncode == 0,
+            'External CPIO rejected archive')
+    skips = 'adsp_loader_init,pil_tz_init,pil_mss_init,msm_pil_init,msm_vidc_init,sensors_ssc_init,kgsl_3d_init,tz_log_init'
+    require(new.cmdline == old.cmdline+' ignore_loglevel initcall_debug initcall_blacklist='+skips+
+            ' androidboot.selinux=permissive', 'Unexpected cmdline')
+    before = (ROOT/'hardware-tests/test18-cleanup-full-after/boot.bin').read_bytes()
+    require(len(before) == 67108864 and SHA(before) ==
+            '1af22309c02a580d8ffcc27dc568533de13e379ae17fec507885026b441402ff', 'Wrong full Test18 boot')
+    padded = data+b'\0'*(-len(data)%512)
+    require(SHA(padded) == '280b615c87daf67f871d800d9c3d400c1f3b5c3f89cc99ce700a14251f4687f7',
+            'Wrong padded image')
+    full_after = padded+before[len(padded):]
+    result = dict(passed=True, image_sha256=IMAGE_SHA, image_bytes=len(data), padded_bytes=len(padded),
+                  padded_sha256=SHA(padded), source_sha256=SOURCE_SHA, cpio_sha256=CPIO_SHA,
+                  raw_sha256=SHA(raw1), raw_changed_bytes=4, original_988_initcalls_unchanged=True,
+                  no_deferred_or_cleanup_bypass_or_led_cave=True, dt_checks=dt_checks,
+                  ramdisk_changed_entries=sorted(changed), ramdisk_added_entries=sorted(added),
+                  other_encoded_cpio_entries_and_order_exact=True,
+                  init_changed_byte_offsets=['0xfc079','0xfc080'], init_sha256=SHA(i1),
+                  independent_init_adbd_toybox_review='los-recovery-init-adbd-binary-review.json',
+                  diagnostic_only_permissive_root_usb_adb=True,
+                  native_toybox_blkid_registration_independently_verified=True,
+                  bounded_logger_and_fixed_p36_uuid_type_geometry_private_mount_guards_reviewed=True,
+                  no_automatic_data_cache_persist_dcmlog_mounts=True,
+                  charger_disabled_and_recovery_explicit_args=True, mtp_actions_absent=True,
+                  original_peripheral_and_functionfs_ready_actions_preserved=True,
+                  signature_target='/boot', signature_verified=True, boot_id_valid=True,
+                  payload_header_load_addresses_and_second_section_preserved=True,
+                  expected_current_full_boot_sha256=SHA(before), expected_full_boot_after_sha256=SHA(full_after),
+                  expected_full_boot_tail_after_candidate_byte_exact=True,
+                  hardware_tested=False, phone_operations=False,
+                  limits=['Diagnostic skips and permissive recovery do not establish production LOS compatibility.',
+                          'Runtime USB, UID, enforcement, display and cache capture require observation.',
+                          'Uninterruptible kernel I/O may outlast userspace timeout; workers are bounded and not retried.'])
+    with output.open('x') as stream:
+        json.dump(result,stream,indent=2);stream.write('\n');stream.flush();os.fsync(stream.fileno())
+    print(json.dumps({k:result[k] for k in ('passed','image_sha256','padded_sha256','expected_full_boot_after_sha256')},indent=2))
+
+
+if __name__ == '__main__':
+    main()

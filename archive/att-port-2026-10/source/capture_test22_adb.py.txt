@@ -1,0 +1,329 @@
+#!/usr/bin/env python3
+"""One bounded, read-only Test22 Android capture; no phone writes or resets.
+
+Use the pinned adb29 server on port5038. Each unique output directory is used
+once. All phone files are fixed diagnostics; archives are constructed locally
+from individually bounded, hash-checked, non-symlink regular files.
+"""
+from pathlib import Path
+import argparse
+import base64
+import hashlib
+import io
+import json
+import os
+import re
+import secrets
+import selectors
+import shlex
+import subprocess
+import tarfile
+import time
+
+ROOT = Path(__file__).resolve().parent
+ADB = Path.home() / '.local/share/axon-m-edl/platform-tools-29.0.6/adb'
+PORT = '5038'
+KERNEL = '4.4.302-cip112-fujisan'
+LINEAGE = '23.2-20261006-UNOFFICIAL-fujisan'
+COLLECTOR = '/system/etc/axon-diag-test20-collect.sh'
+COLLECTOR_SHA = '42b5c0e9d24dba1195e9c556422c0d5d8df47c339bb82dcfd55b62335dc17bfe'
+INIT_SHA = '31bfd4ad1cdd17986110499be2a7e60748dbc5f8c3df4a0c692c3f3a2bfc4a18'
+KINDS = ('identity', 'dmesg', 'logcat', 'usb', 'processes', 'stacks', 'graphics')
+RAM_NAMES = tuple(f'{n:02}-{k}.ready' for n in range(1, 5) for k in KINDS) + (
+    'collector.ready', 'collector-status.txt')
+CACHE_NAMES = tuple(f'{n:02}-{k}.txt' for n in range(1, 5) for k in KINDS) + (
+    'collector.txt', 'ABOUT.txt', 'SHA256SUMS', 'COMPLETE.txt', 'INCOMPLETE.txt')
+MEMBER_CAP = 262144
+ARCHIVE_CAP = 9 * 1024 * 1024
+WHOLE_SECONDS = 240
+
+
+def sha(data):
+    return hashlib.sha256(data).hexdigest()
+
+
+def parse_envelope(raw, begin, end, cap):
+    """Ignore adb/propClient preamble; accept only this request's frame."""
+    opening = b'\n' + begin.encode() + b'\n'
+    at = raw.find(opening)
+    if at < 0:
+        return b'', None, False
+    content = raw[at + len(opening):]
+    marker = b'\n' + end.encode() + b':'
+    finish = content.rfind(marker)
+    if finish < 0:
+        return content[:cap], None, False
+    suffix = content[finish + len(marker):]
+    match = re.match(rb'([0-9]{1,3})\r?\n', suffix)
+    if not match or finish > cap:
+        return content[:cap], None, False
+    return content[:finish], int(match[1]), True
+
+
+def bounded_process(command, timeout, cap):
+    process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    stream = process.stdout
+    os.set_blocking(stream.fileno(), False)
+    selector = selectors.DefaultSelector()
+    selector.register(stream, selectors.EVENT_READ)
+    data = bytearray()
+    stop = time.monotonic() + timeout
+    status = 'ok'
+    try:
+        while selector.get_map():
+            left = stop - time.monotonic()
+            if left <= 0:
+                status = 'host_timeout'
+                break
+            for key, _ in selector.select(min(left, 0.2)):
+                chunk = os.read(key.fd, min(65536, cap + 1 - len(data)))
+                if not chunk:
+                    selector.unregister(key.fileobj)
+                    continue
+                data.extend(chunk)
+                if len(data) > cap:
+                    status = 'byte_limit'
+                    break
+            if status != 'ok':
+                break
+        if status != 'ok':
+            process.kill()
+        try:
+            result = process.wait(timeout=max(0.1, min(2, stop - time.monotonic())))
+        except subprocess.TimeoutExpired:
+            process.kill()
+            result = process.wait(timeout=2)
+            status = 'host_timeout'
+    finally:
+        selector.close()
+        stream.close()
+        if process.poll() is None:
+            process.kill()
+            process.wait(timeout=2)
+    return bytes(data[:cap]), result, status
+
+
+class Capture:
+    def __init__(self, serial, deadline):
+        self.serial = serial  # Bound internally; never printed or recorded.
+        self.deadline = deadline
+
+    def remote(self, command, cap=262144, seconds=8):
+        left = self.deadline - time.monotonic()
+        if left < 2:
+            return b'', {'status': 'transaction_deadline', 'remote_rc': None}
+        remote_seconds = max(1, min(seconds, int(left - 1)))
+        nonce = secrets.token_hex(12)
+        begin, end = 'AXON22_BEGIN_' + nonce, 'AXON22_END_' + nonce
+        wrapper = (
+            'set -o pipefail; '
+            f"printf '\\n%s\\n' {shlex.quote(begin)}; "
+            f'/system/bin/timeout -k 1 {remote_seconds} /system/bin/sh -c '
+            f'{shlex.quote(command)} 2>&1 | /system/bin/head -c {cap}; '
+            'rc=$?; '
+            f"printf '\\n%s:%s\\n' {shlex.quote(end)} \"$rc\""
+        )
+        raw, adb_rc, status = bounded_process(
+            [str(ADB), '-P', PORT, '-s', self.serial, 'exec-out',
+             '/system/bin/sh -c ' + shlex.quote(wrapper)],
+            min(left, remote_seconds + 4), cap + 8192)
+        body, remote_rc, framed = parse_envelope(raw, begin, end, cap)
+        if status == 'ok' and not framed:
+            status = 'framing_error'
+        elif status == 'ok' and (adb_rc != 0 or remote_rc != 0):
+            status = 'remote_error'
+        return body, {'status': status, 'remote_rc': remote_rc, 'adb_rc': adb_rc,
+                      'framed': framed, 'bytes': len(body)}
+
+
+def identity_command():
+    return (
+        "printf 'kernel=%s\\n' \"$(/system/bin/uname -r)\"; "
+        "printf 'lineage=%s\\n' \"$(/system/bin/getprop ro.lineage.version)\"; "
+        "printf 'recovery=%s\\n' \"$(/system/bin/getprop init.svc.recovery)\"; "
+        "printf 'twrp=%s\\n' \"$(/system/bin/getprop ro.twrp.version)\"; "
+        "printf 'uid=%s\\n' \"$(/system/bin/id -u)\"; "
+        f"x=$(/system/bin/sha256sum {shlex.quote(COLLECTOR)}) || exit 30; "
+        "printf 'collector=%s\\n' \"${x%% *}\"; "
+        "x=$(/system/bin/sha256sum /system/bin/init) || exit 31; "
+        "printf 'init=%s\\n' \"${x%% *}\""
+    )
+
+
+def verify_identity(body, metadata):
+    if metadata['status'] != 'ok':
+        return False
+    try:
+        lines = body.decode('ascii').splitlines()
+        pairs = [line.split('=', 1) for line in lines]
+        if any(len(p) != 2 for p in pairs):
+            return False
+        values = dict(pairs)
+        if len(values) != len(pairs):
+            return False
+    except (UnicodeError, ValueError):
+        return False
+    return values == {'kernel': KERNEL, 'lineage': LINEAGE, 'recovery': '', 'twrp': '',
+                      'uid': '0', 'collector': COLLECTOR_SHA, 'init': INIT_SHA}
+
+
+def property_command(names):
+    return '; '.join(f"printf '{name}=%s\\n' \"$(/system/bin/getprop {name})\""
+                     for name in names)
+
+
+def diagnostic_file_command(directory, name, cap):
+    if directory not in ('/dev/axon-diag-test22', '/cache/axon-diag-test22'):
+        raise ValueError('not a fixed diagnostic directory')
+    allowed = RAM_NAMES if directory.startswith('/dev/') else CACHE_NAMES
+    if name not in allowed:
+        raise ValueError('not an allowed diagnostic filename')
+    target = directory + '/' + name
+    return (
+        f'd={shlex.quote(directory)}; p={shlex.quote(target)}; '
+        '[ -d "$d" ] && [ ! -L "$d" ] && [ -f "$p" ] && [ ! -L "$p" ] || exit 44; '
+        'n=$(/system/bin/stat -c %s "$p") || exit 45; '
+        'case "$n" in ""|*[!0-9]*) exit 45 ;; esac; '
+        f'[ "$n" -le {cap} ] || exit 46; '
+        'h=$(/system/bin/sha256sum "$p") || exit 47; '
+        "printf 'SIZE %s\\nSHA %s\\n' \"$n\" \"${h%% *}\"; "
+        '/system/bin/base64 "$p"'
+    )
+
+
+def decode_diagnostic_file(body):
+    lines = body.split(b'\n', 2)
+    if len(lines) != 3 or not re.fullmatch(rb'SIZE [0-9]{1,9}', lines[0]):
+        raise ValueError('malformed file size envelope')
+    if not re.fullmatch(rb'SHA [0-9a-f]{64}', lines[1]):
+        raise ValueError('malformed file hash envelope')
+    size = int(lines[0][5:])
+    if size > MEMBER_CAP:
+        raise ValueError('file cap exceeded')
+    encoded = lines[2].replace(b'\n', b'').replace(b'\r', b'')
+    data = base64.b64decode(encoded, validate=True)
+    if len(data) != size or sha(data).encode() != lines[1][4:]:
+        raise ValueError('changing or corrupted diagnostic file')
+    return data
+
+
+def save_state(out, state):
+    temporary = out / '.capture.json.tmp'
+    with temporary.open('w') as stream:
+        json.dump(state, stream, indent=2)
+        stream.write('\n')
+        stream.flush()
+        os.fsync(stream.fileno())
+    temporary.replace(out / 'capture.json')
+
+
+def write_text_capture(capture, out, state, name, command, cap=262144, seconds=8):
+    body, info = capture.remote(command, cap, seconds)
+    with (out / name).open('xb') as stream:
+        stream.write(body)
+    info.update({'sha256': sha(body), 'bytes': len(body)})
+    state['files'][name] = info
+    save_state(out, state)
+    print(json.dumps({'file': name, 'bytes': len(body), 'status': info['status']}), flush=True)
+
+
+def write_archive(capture, out, state, directory, names, archive_name):
+    members, total = {}, 0
+    archive_path = out / archive_name
+    # Local tar creation only: no device tar, links, arbitrary recursive walk,
+    # path extraction, or exec-out binary framing assumption.
+    with archive_path.open('xb') as stream, tarfile.open(fileobj=stream, mode='w') as archive:
+        for name in names:
+            if time.monotonic() >= capture.deadline - 2:
+                members[name] = {'status': 'transaction_deadline'}
+                continue
+            encoded, info = capture.remote(diagnostic_file_command(directory, name, MEMBER_CAP),
+                                           cap=360000, seconds=5)
+            if info['status'] != 'ok':
+                info['status'] = 'absent_or_nonregular' if info['remote_rc'] == 44 else info['status']
+                members[name] = info
+                continue
+            try:
+                data = decode_diagnostic_file(encoded)
+                if total + len(data) > ARCHIVE_CAP:
+                    raise ValueError('archive cap exceeded')
+            except (ValueError, base64.binascii.Error):
+                members[name] = {'status': 'invalid_or_changing_file'}
+                continue
+            total += len(data)
+            entry = tarfile.TarInfo('axon-diag-test22/' + name)
+            entry.size, entry.mode, entry.mtime = len(data), 0o600, 0
+            archive.addfile(entry, io.BytesIO(data))
+            members[name] = {'status': 'ok', 'bytes': len(data), 'sha256': sha(data)}
+    data = archive_path.read_bytes()
+    state['files'][archive_name] = {'status': 'captured_allowlisted_members', 'bytes': len(data),
+                                   'sha256': sha(data), 'source': directory, 'members': members}
+    save_state(out, state)
+    print(json.dumps({'file': archive_name, 'bytes': len(data),
+                      'members_ok': sum(v['status'] == 'ok' for v in members.values())}), flush=True)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--output-dir', type=Path, default=ROOT / 'test22-full-android-live-v1')
+    args = parser.parse_args()
+    os.umask(0o077)
+    args.output_dir.mkdir(mode=0o700, parents=True, exist_ok=False)
+    state = {'captured': False, 'read_only': True, 'files': {}, 'whole_timeout_seconds': WHOLE_SECONDS,
+             'no_device_writes_resets_root_requests_mounts_or_settings': True}
+    save_state(args.output_dir, state)
+    deadline = time.monotonic() + WHOLE_SECONDS
+    raw, rc, status = bounded_process([str(ADB), '-P', PORT, 'devices'], 10, 65536)
+    rows = [line.split() for line in raw.decode('utf-8', 'replace').splitlines()
+            if '\t' in line and len(line.split()) >= 2]
+    state['adb_states'] = [row[1] for row in rows]
+    if status != 'ok' or rc != 0 or len(rows) != 1 or rows[0][1] != 'device':
+        state['refused'] = 'require exactly one adb device; recovery/unauthorized/offline rejected'
+        save_state(args.output_dir, state)
+        print(json.dumps({'captured': False, 'reason': state['refused']}))
+        return 2
+    capture = Capture(rows[0][0], deadline)
+    identity, evidence = capture.remote(identity_command(), 4096, 10)
+    if not verify_identity(identity, evidence):
+        state['refused'] = 'exact Test22 full-Android identity/root guard failed'
+        state['identity_command_status'] = evidence
+        save_state(args.output_dir, state)
+        print(json.dumps({'captured': False, 'reason': state['refused']}))
+        return 3
+    state.update({'captured': True, 'full_android_identity_verified': True, 'adb_state': 'device'})
+    (args.output_dir / 'identity.txt').write_bytes(identity)
+    state['files']['identity.txt'] = {'status': 'ok', 'bytes': len(identity), 'sha256': sha(identity)}
+    save_state(args.output_dir, state)
+    props = ('ro.lineage.version','ro.build.version.release','ro.build.type','ro.debuggable',
+             'ro.secure','ro.adb.secure','service.adb.root','sys.boot_completed','dev.bootcomplete',
+             'apexd.status','keystore.module_hash.sent','odsign.key.done','odsign.verification.done',
+             'sys.axon.adb.apex_ready','sys.usb.config','sys.usb.state','sys.usb.ffs.ready',
+             'init.svc.adbd','init.svc.zygote','init.svc.zygote_secondary','init.svc.surfaceflinger',
+             'init.svc.servicemanager','init.svc.hwservicemanager','init.svc.vold','init.svc.keystore2',
+             'init.svc.apexd','init.svc.odsign','init.svc.axon-diag-test22','init.svc.axon-save-test22')
+    captures = [
+        ('dmesg-first.txt','/system/bin/dmesg | /system/bin/tail -c 750000',800000,10),
+        ('kernel-runtime.txt','/system/bin/uname -a; /system/bin/cat /proc/uptime /proc/version /proc/meminfo; /system/bin/getenforce; /system/bin/id',65536,8),
+        ('services.txt',property_command(props),65536,8),
+        ('mounts.txt','/system/bin/cat /proc/mounts /proc/partitions; /system/bin/df -k / /system /data /cache /dev',131072,8),
+        ('tasks.txt','/system/bin/ps -A -T',262144,8),
+        ('priority-stacks.txt',f'/system/bin/sh {COLLECTOR} --job stacks',300000,6),
+        ('usb.txt',f'/system/bin/sh {COLLECTOR} --job usb',262144,6),
+        ('graphics.txt',f'/system/bin/sh {COLLECTOR} --job graphics',300000,6),
+        ('logcat.txt','/system/bin/logcat -b all -d -t 2000',1048576,10),
+    ]
+    for name, command, cap, seconds in captures:
+        write_text_capture(capture,args.output_dir,state,name,command,cap,seconds)
+    write_archive(capture,args.output_dir,state,'/dev/axon-diag-test22',RAM_NAMES,'diagnostic-ram.tar')
+    write_archive(capture,args.output_dir,state,'/cache/axon-diag-test22',CACHE_NAMES,'diagnostic-cache.tar')
+    write_text_capture(capture,args.output_dir,state,'dmesg-last.txt',
+                       '/system/bin/dmesg | /system/bin/tail -c 750000',800000,10)
+    state['finished'] = True
+    state['transaction_deadline_reached'] = time.monotonic() >= deadline
+    save_state(args.output_dir,state)
+    print(json.dumps({'captured': True,'finished': True,'files':len(state['files'])}),flush=True)
+    return 0
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())

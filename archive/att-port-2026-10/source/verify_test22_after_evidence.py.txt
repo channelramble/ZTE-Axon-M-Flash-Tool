@@ -1,0 +1,37 @@
+#!/usr/bin/env python3
+from pathlib import Path
+import hashlib,json,subprocess,base64
+ROOT=Path(__file__).resolve().parent
+REMOTE='/EXAMPLE/REMOTE_HOME/.local/share/axon-m-edl/sessions/SESSION_ID/test22-edl-system-write'
+CONFIG='/EXAMPLE/LOCAL_HOME/.crosstalk/ssh/config'
+TARGET='508cd08359c6602c36d1bf0a2711dc064bfae509b5773b55933d68ad1f2570a8'
+SIZE=6979321856
+out=ROOT/'hardware-tests/test22-edl-system-write';out.mkdir(exist_ok=False)
+def digest(p):
+ h=hashlib.sha256()
+ with p.open('rb') as f:
+  for chunk in iter(lambda:f.read(4194304),b''):h.update(chunk)
+ return h.hexdigest()
+for name in ['transaction.json','firehose.xml.log','protected-before','protected-after','original-blocks','block-readbacks']:
+ subprocess.run(['scp','-q','-r','-F',CONFIG,'DEVICE_HOST:'+REMOTE+'/'+name,str(out)],check=True,timeout=240)
+s=json.loads((out/'transaction.json').read_text())
+assert s['complete'] and s['full_readback_verified'] and s['protected_partitions_verified']
+assert not s['reset_sent'] and not s['userdata_written'] and not s.get('error')
+assert s['in_progress_offset'] is None and s['system_after']['sha256']==TARGET and s['system_after']['bytes']==SIZE
+source=ROOT/'test22-system-v1/system.img';assert source.stat().st_size==SIZE and digest(source)==TARGET
+subprocess.run(['/bin/cp','-c',str(source),str(out/'system-after.bin')],check=True)
+assert digest(out/'system-after.bin')==TARGET
+before=json.loads((ROOT/'hardware-tests/test22-edl-before/audit.json').read_text())
+for phase in ['protected-before','protected-after']:
+ for name in ['gpt','boot','recovery','misc']:
+  p=out/phase/(name+'.bin');expected=before['files'][name];assert p.stat().st_size==expected['bytes'] and digest(p)==expected['sha256']
+  assert s[phase.replace('-','_')][name]==expected
+blocks=json.loads((ROOT/'test22-system-delta.json').read_text())['blocks']
+assert s['blocks_completed']==[b['offset'] for b in blocks]
+for b in blocks:
+ assert digest(out/'original-blocks'/(str(b['offset'])+'.bin'))==b['original_sha256']
+ assert (out/'block-readbacks'/(str(b['offset'])+'.bin')).read_bytes()==base64.b64decode(b['data_base64'],validate=True)
+receipt={'complete':True,'both_macs_verified':True,'system_sha256':TARGET,'system_bytes':SIZE,'transaction_sha256':digest(out/'transaction.json'),'protected_sha256':{n:v['sha256'] for n,v in before['files'].items() if n!='system'},'all_13_block_readbacks_verified':True,'system_copy_method':'APFS clone of byte-identical prepared image, matched to full live EDL read SHA256 and rehashed after cloning'}
+(out/'local-verification.json').write_text(json.dumps(receipt,indent=2)+'\n')
+subprocess.run(['scp','-q','-F',CONFIG,str(out/'local-verification.json'),'DEVICE_HOST:'+REMOTE+'/'],check=True)
+print('Full Test22 system readback and protected partitions verified on both Macs; receipt returned.')

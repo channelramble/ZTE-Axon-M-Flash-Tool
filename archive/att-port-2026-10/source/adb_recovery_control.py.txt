@@ -1,0 +1,436 @@
+#!/usr/bin/env python3
+"""Write one verified 3.18 recovery control from the running 3.18 TWRP.
+
+Default: local file validation only. --execute explicitly enables the one
+recovery write. There is no reboot, erase, boot write, or misc write. Device
+binary data is copied into unique /tmp files and pulled, never exec-out.
+"""
+import argparse
+import hashlib
+import json
+import math
+import os
+from pathlib import Path
+import re
+import secrets
+import shlex
+import signal
+import struct
+import subprocess
+import sys
+import time
+
+ROOT = Path(__file__).resolve().parent
+sys.path.insert(0, str(ROOT.parent / 'ZTE-Axon-M-Flash-Tool/scripts'))
+from check_backups import file_hash, read_gpt
+from fujisan_image import BootImage, report
+
+SECTOR = 512
+PORT = 5038
+ADB_RELATIVE = '.local/share/axon-m-edl/platform-tools-29.0.6/adb'
+COMMAND_TIMEOUT = 45
+TRANSACTION_TIMEOUT = 300
+BOOT_BYTES = 23430195
+BOOT_SHA = '76990c6f20c61a919629600c9afbb4551e0792e911f05034927852c9fcdefe28'
+BOOT_PADDED_SHA = '320e252ae5b1e8b17cf366025217286c6c60b920f53b016e44d3080a9fce6c8d'
+KERNEL_GZIP_SHA = '559b484852096ad63c42a7b04985fcc5d842bc48a641f60b46c2e9bcb5285b48'
+GEOMETRY = {
+    'boot': ('mmcblk0p18', 1050624, 131072),
+    'recovery': ('mmcblk0p19', 1181696, 131072),
+    'misc': ('mmcblk0p38', 18626584, 2048),
+}
+BACKUPS = {
+    'gpt_main0.bin': (7168, '7f1e4fd44e69e004189f0256ce6d35addfb1e3dbfe1cd55bfd2047b580b1e891'),
+    'gpt_backup0.bin': (16896, 'b76a0353e9b841984f434f8f7d875f76b18ba1d4c01db15958d13e3525b03990'),
+    'boot.bin': (67108864, 'd71c53d8d6595f316236b72d5797a2340842986f6551be0d103631d58bcb0276'),
+    'recovery.bin': (67108864, '80a06ae52db63541b3e2dfdd115dee8aff370ac666d1905c7c657dac0043516f'),
+    'misc.bin': (1048576, '30e14955ebf1352266dc2ff8067e68104607e750abb9d3b36582b8af909fcb58'),
+}
+
+
+def digest(data):
+    return hashlib.sha256(data).hexdigest()
+
+
+def load_plan(path):
+    plan = json.loads(Path(path).read_text())
+    required = {'partition', 'image', 'image_sha256', 'backups', 'output'}
+    if not required <= set(plan) or set(plan) - required - {'adb'}:
+        raise ValueError('Unexpected or missing recovery-control plan fields')
+    if plan['partition'] != 'recovery':
+        raise ValueError('Only recovery is permitted')
+    for field in ('image', 'backups', 'output'):
+        if not isinstance(plan[field], str) or not Path(plan[field]).is_absolute():
+            raise ValueError(field + ' must be an absolute path')
+    expected_adb = Path.home() / ADB_RELATIVE
+    if 'adb' in plan and Path(plan['adb']) != expected_adb:
+        raise ValueError('Only the separately installed adb 29.0.6 is permitted')
+    plan['adb'] = str(expected_adb)
+    if not re.fullmatch('[0-9a-f]{64}', plan['image_sha256']):
+        raise ValueError('Expected an exact image SHA-256')
+    image = Path(plan['image']).read_bytes()
+    if digest(image) != plan['image_sha256']:
+        raise ValueError('Candidate hash differs from plan')
+    info = report(image)
+    boot = BootImage(image)
+    if (not info['signature_verified'] or info['signature_target'] != '/recovery'
+            or not boot.id_valid or len(image) != boot.payload_length + info['signature_bytes']):
+        raise ValueError('Expected a valid exact-length /recovery-signed image')
+    if (not (info['kernel_version'] or '').startswith('Linux version 3.18.71')
+            or info['kernel_gzip_sha256'] != KERNEL_GZIP_SHA):
+        raise ValueError('This writer is restricted to the published 3.18 control kernel')
+    padded = image + b'\0' * (-len(image) % SECTOR)
+    if not 0 < len(padded) <= GEOMETRY['recovery'][2] * SECTOR:
+        raise ValueError('Candidate exceeds recovery partition')
+    directory = Path(plan['backups'])
+    manifest = json.loads((directory / 'backup-manifest.json').read_text())
+    for name, (size, expected_hash) in BACKUPS.items():
+        item = manifest['files'][name]
+        file = directory / name
+        if (item['bytes'] != size or item['sha256'] != expected_hash
+                or file.stat().st_size != size or file_hash(file) != expected_hash):
+            raise ValueError('Original full backup verification failed: ' + name)
+    primary = (directory / 'gpt_main0.bin').read_bytes()
+    gpt = read_gpt(primary)
+    if len(primary) != 14 * SECTOR:
+        raise ValueError('Expected the verified 14-sector primary GPT')
+    # Also pin GPT entry numbers, since Linux device nodes are fixed below.
+    array_lba = struct.unpack_from('<Q', primary, SECTOR + 72)[0]
+    entry_bytes = struct.unpack_from('<I', primary, SECTOR + 84)[0]
+    for name, (node, start, sectors) in GEOMETRY.items():
+        part = gpt['partitions'][name]
+        if (part['start_sector'], part['sectors']) != (start, sectors):
+            raise ValueError('Unexpected GPT geometry: ' + name)
+        index = int(node.removeprefix('mmcblk0p')) - 1
+        offset = array_lba * SECTOR + index * entry_bytes
+        entry_name = primary[offset + 56:offset + 128].decode('utf-16-le').split('\0', 1)[0]
+        if entry_name != name:
+            raise ValueError('GPT entry number differs from fixed Linux node')
+    if any((directory / 'misc.bin').read_bytes()):
+        raise ValueError('Expected unchanged entirely zero misc backup')
+    return plan, image, padded, primary
+
+
+def select_serial(data):
+    """Return one recovery serial privately; never include it in errors."""
+    text = data.decode('utf-8', errors='strict').replace('\r', '')
+    lines = text.splitlines()
+    if lines.count('List of devices attached') != 1:
+        raise ValueError('Unexpected adb inventory response')
+    tail = lines[lines.index('List of devices attached') + 1:]
+    entries = [line.split() for line in tail if line.strip()]
+    if len(entries) != 1 or len(entries[0]) != 2 or entries[0][1] != 'recovery':
+        raise ValueError('Exactly one adb device in recovery state is required')
+    serial = entries[0][0]
+    if not serial or any(character.isspace() for character in serial):
+        raise ValueError('Invalid private adb device binding')
+    return serial
+
+
+def parse_frame(data, token):
+    begin = ('\n' + token + '_BEGIN\n').encode()
+    end = ('\n' + token + '_RC:').encode()
+    data = data.replace(b'\r\n', b'\n')
+    if data.count(begin) != 1 or data.count(end) != 1:
+        raise ValueError('Missing or ambiguous shell response framing')
+    body = data.split(begin, 1)[1]
+    result, suffix = body.split(end, 1)
+    if suffix != b'0\n':
+        raise ValueError('Remote shell command did not complete successfully')
+    return result.rstrip(b'\n')
+
+
+def validate_geometry(lines):
+    """Pairs of fixed label/value lines; no serials or GUIDs."""
+    if len(lines) % 2 or len(lines) != 28:
+        raise ValueError('Incomplete live block geometry')
+    actual = dict(zip(lines[::2], lines[1::2]))
+    expected = {'disk_target': '/dev/block/mmcblk0', 'disk_sector': '512'}
+    for name, (node, start, sectors) in GEOMETRY.items():
+        expected.update({name + '_target': '/dev/block/' + node,
+                         name + '_node': '/dev/block/' + node,
+                         name + '_start': str(start), name + '_size': str(sectors)})
+    if actual != expected:
+        raise ValueError('Live block paths, starts, sizes, or sector width differ')
+    return actual
+
+
+def save_state(path, state):
+    temporary = path.with_suffix('.json.tmp')
+    with temporary.open('w') as stream:
+        json.dump(state, stream, indent=2)
+        stream.write('\n')
+        stream.flush()
+        os.fsync(stream.fileno())
+    os.replace(temporary, path)
+    directory_fd = os.open(path.parent, os.O_RDONLY)
+    try:
+        os.fsync(directory_fd)
+    finally:
+        os.close(directory_fd)
+
+
+class AdbRecovery:
+    def __init__(self, adb, output, deadline):
+        self.adb = str(adb)
+        self.output = Path(output)
+        self.deadline = deadline
+        self.serial = None
+        self.workspace = None
+        self.armed_length = None
+        self.stage_path = None
+        self.verified_stage_length = None
+        self.write_attempted = False
+
+    def _record(self, label, result=None, error=None):
+        entry = {'time': time.time(), 'label': label}
+        if result is not None:
+            entry['returncode'] = result.returncode
+            # Inventory is deliberately not logged: it contains device IDs.
+            if label != 'inventory':
+                for name, raw in (('stdout', result.stdout), ('stderr', result.stderr)):
+                    text = raw.decode('utf-8', errors='replace')
+                    if self.serial:
+                        text = text.replace(self.serial, '<bound-device>')
+                    entry[name] = text[:65536]
+        if error:
+            entry['error'] = error
+        with (self.output / 'adb-commands.jsonl').open('a') as stream:
+            stream.write(json.dumps(entry) + '\n')
+            stream.flush()
+
+    def _run(self, arguments, label, bound=True):
+        remaining = self.deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError('Whole transaction deadline reached')
+        command = [self.adb, '-P', str(PORT)]
+        if bound:
+            if self.serial is None:
+                raise RuntimeError('No uniquely bound recovery device')
+            command += ['-s', self.serial]
+        command += list(arguments)
+        try:
+            with subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE) as process:
+                try:
+                    stdout, stderr = process.communicate(timeout=min(COMMAND_TIMEOUT, remaining))
+                except BaseException:
+                    process.kill()
+                    process.communicate()
+                    raise
+                result = subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
+        except subprocess.TimeoutExpired:
+            self._record(label, error='command timeout; no retry')
+            raise TimeoutError(label + ' timed out; no automatic retry') from None
+        self._record(label, result)
+        if result.returncode:
+            raise RuntimeError(label + ' failed; inspect private command log')
+        return result.stdout
+
+    def shell(self, command, label):
+        token = 'AXON_CTL_' + secrets.token_hex(12)
+        script = ("printf '\\n" + token + "_BEGIN\\n'\n"
+                  "(\nset -e\n" + command + "\n)\n"
+                  "axon_result=$?\nprintf '\\n" + token + "_RC:%s\\n' \"$axon_result\"\n"
+                  "exit \"$axon_result\"\n")
+        raw = self._run(['shell', 'sh', '-c', shlex.quote(script)], label)
+        return parse_frame(raw, token).decode('utf-8', errors='strict')
+
+    def identity(self):
+        version = self._run(['version'], 'adb-version', bound=False).decode('ascii', errors='replace')
+        if not re.search(r'^Version 29\.0\.6(?:-|\s|$)', version, re.MULTILINE):
+            raise ValueError('Expected adb 29.0.6')
+        self.serial = select_serial(self._run(['devices'], 'inventory', bound=False))
+        result = self.shell('uname -r\ngetprop ro.twrp.version\ngetprop ro.product.device\nid -u', 'identity')
+        lines = result.splitlines()
+        if (len(lines) != 4 or not lines[0].startswith('3.18.71')
+                or lines[1:] != ['3.2.3-0', 'fujisan', '0']):
+            raise ValueError('Expected root TWRP 3.2.3-0 on the 3.18.71 fujisan kernel')
+        return {'kernel_release': lines[0], 'twrp_version': lines[1],
+                'product_device': lines[2], 'root': True, 'adb_port': PORT}
+
+    def geometry(self):
+        commands = ["printf 'disk_target\\n'", 'readlink -f /dev/block/mmcblk0',
+                    "printf 'disk_sector\\n'", 'cat /sys/class/block/mmcblk0/queue/logical_block_size',
+                    'test -b /dev/block/mmcblk0']
+        for name, (node, _, _) in GEOMETRY.items():
+            commands += ["printf '" + name + "_target\\n'",
+                         'readlink -f /dev/block/bootdevice/by-name/' + name,
+                         "printf '" + name + "_node\\n'", 'readlink -f /dev/block/' + node,
+                         "printf '" + name + "_start\\n'", 'cat /sys/class/block/' + node + '/start',
+                         "printf '" + name + "_size\\n'", 'cat /sys/class/block/' + node + '/size',
+                         'test -b /dev/block/' + node]
+        return validate_geometry(self.shell('\n'.join(commands), 'geometry').splitlines())
+
+    def make_workspace(self):
+        self.workspace = '/tmp/axon-recovery-control-' + secrets.token_hex(12)
+        self.shell('umask 077\nmkdir ' + shlex.quote(self.workspace), 'workspace-create')
+        return self.workspace
+
+    def capture(self, kind, path):
+        specs = {'gpt': ('mmcblk0', 14),
+                 'recovery': ('mmcblk0p19', GEOMETRY['recovery'][2]),
+                 'misc': ('mmcblk0p38', GEOMETRY['misc'][2]),
+                 'boot': ('mmcblk0p18', math.ceil(BOOT_BYTES / SECTOR))}
+        if kind not in specs or self.workspace is None:
+            raise ValueError('Unsupported capture or missing private workspace')
+        path = Path(path)
+        if path.exists() or not re.fullmatch('[a-z0-9-]+\.bin', path.name):
+            raise ValueError('Capture destination must be new with a fixed safe name')
+        node, sectors = specs[kind]
+        remote = self.workspace + '/' + path.name
+        command = ('dd if=/dev/block/' + node + ' of=' + shlex.quote(remote)
+                   + ' bs=512 count=' + str(sectors) + ' 2>' + shlex.quote(remote + '.dd.log')
+                   + '\nwc -c < ' + shlex.quote(remote))
+        response = self.shell(command, 'capture-' + path.name)
+        if response.strip() != str(sectors * SECTOR):
+            raise ValueError('Short device-side capture: ' + kind)
+        partial = path.with_suffix('.part')
+        if partial.exists():
+            raise FileExistsError('Partial capture already exists')
+        self._run(['pull', remote, str(partial)], 'pull-' + path.name)
+        if partial.stat().st_size != sectors * SECTOR:
+            raise ValueError('Short pulled capture: ' + kind)
+        os.link(partial, path)  # refuses to replace an existing destination
+        partial.unlink()
+
+    def stage(self, padded_file, expected_hash, expected_bytes):
+        self.verified_stage_length = None
+        if self.workspace is None or self.write_attempted:
+            raise ValueError('Missing workspace or recovery write already attempted')
+        self.stage_path = self.workspace + '/candidate-padded.bin'
+        self._run(['push', str(padded_file), self.stage_path], 'stage-push')
+        result = self.shell('wc -c < ' + shlex.quote(self.stage_path)
+                            + '\nsha256sum ' + shlex.quote(self.stage_path), 'stage-verify').splitlines()
+        if (len(result) != 2 or result[0].strip() != str(expected_bytes)
+                or result[1].split() != [expected_hash, self.stage_path]):
+            raise ValueError('Device-staged image length/hash mismatch')
+        self.verified_stage_length = expected_bytes
+
+    def arm(self, size):
+        if (self.stage_path is None or self.verified_stage_length != size
+                or self.write_attempted or not 0 < size <= 67108864 or size % SECTOR):
+            raise ValueError('Invalid recovery write length or unverified stage')
+        self.armed_length = size
+
+    def write_recovery(self):
+        if self.armed_length is None:
+            raise RuntimeError('Recovery write has not been explicitly armed')
+        sectors = self.armed_length // SECTOR
+        self.armed_length = None  # one-shot; failure never enables a retry
+        self.write_attempted = True
+        self.shell('dd if=' + shlex.quote(self.stage_path)
+                   + ' of=/dev/block/mmcblk0p19 bs=512 count=' + str(sectors)
+                   + ' conv=notrunc\nsync', 'WRITE-recovery-only')
+
+
+def execute(plan, image, padded, primary, client_factory=AdbRecovery):
+    output = Path(plan['output'])
+    output.mkdir(mode=0o700, parents=True, exist_ok=False)
+    state_file = output / 'transaction.json'
+    state = {'partition': 'recovery', 'node': '/dev/block/mmcblk0p19',
+             'start_sector': 1181696, 'partition_sectors': 131072,
+             'write_sectors': len(padded) // SECTOR, 'image_bytes': len(image),
+             'image_sha256': digest(image), 'padded_sha256': digest(padded),
+             'phase': 'created', 'write_started': False, 'write_completed': False,
+             'readback_verified': False, 'reset_sent': False}
+
+    def phase(name, **values):
+        state.update(values)
+        state['phase'] = name
+        save_state(state_file, state)
+
+    phase('created')
+    client = None
+    try:
+        client = client_factory(plan['adb'], output, time.monotonic() + TRANSACTION_TIMEOUT)
+        identity = client.identity()
+        geometry = client.geometry()
+        phase('identity_verified', identity=identity, geometry=geometry)
+        phase('workspace_created', device_workspace=client.make_workspace())
+        for kind in ('gpt', 'recovery', 'misc', 'boot'):
+            client.capture(kind, output / (kind + '-before.bin'))
+        fresh_gpt = (output / 'gpt-before.bin').read_bytes()
+        read_gpt(fresh_gpt)
+        if fresh_gpt != primary:
+            raise ValueError('Fresh GPT differs from original; no write permitted')
+        for kind in ('recovery', 'misc'):
+            expected_bytes, expected_hash = BACKUPS[kind + '.bin']
+            path = output / (kind + '-before.bin')
+            if path.stat().st_size != expected_bytes or file_hash(path) != expected_hash:
+                raise ValueError('Fresh ' + kind + ' differs from original backup; no write permitted')
+        before_boot = (output / 'boot-before.bin').read_bytes()
+        if (len(before_boot) != math.ceil(BOOT_BYTES / SECTOR) * SECTOR
+                or digest(before_boot[:BOOT_BYTES]) != BOOT_SHA
+                or digest(before_boot) != BOOT_PADDED_SHA):
+            raise ValueError('Current boot is not the exact verified test06 control')
+        phase('preflight_verified', original_recovery_sha256=BACKUPS['recovery.bin'][1],
+              original_misc_sha256=BACKUPS['misc.bin'][1], boot_prefix_sha256=BOOT_SHA)
+        candidate = output / 'candidate-padded.bin'
+        with candidate.open('xb') as stream:
+            stream.write(padded)
+            stream.flush()
+            os.fsync(stream.fileno())
+        client.stage(candidate, digest(padded), len(padded))
+        client.geometry()  # recheck fixed block nodes immediately before arming
+        phase('candidate_staged')
+        client.arm(len(padded))
+        phase('write_started', write_started=True)
+        client.write_recovery()
+        phase('write_completed', write_completed=True)
+        for kind in ('recovery', 'misc', 'boot'):
+            client.capture(kind, output / (kind + '-after.bin'))
+        before_recovery = (output / 'recovery-before.bin').read_bytes()
+        after_recovery = (output / 'recovery-after.bin').read_bytes()
+        expected_recovery = padded + before_recovery[len(padded):]
+        if (len(after_recovery) != 67108864 or after_recovery != expected_recovery
+                or digest(after_recovery[:len(image)]) != digest(image)
+                or digest(after_recovery[:len(padded)]) != digest(padded)):
+            raise ValueError('Full recovery readback mismatch; no reboot or retry')
+        phase('recovery_readback_verified', full_recovery_sha256=digest(after_recovery),
+              recovery_tail_unchanged=True)
+        if (output / 'misc-after.bin').read_bytes() != (output / 'misc-before.bin').read_bytes():
+            raise ValueError('Misc changed after write; no reboot or retry')
+        if (output / 'boot-after.bin').read_bytes() != before_boot:
+            raise ValueError('Boot prefix changed after write; no reboot or retry')
+        phase('complete', readback_verified=True, misc_unchanged=True,
+              boot_prefix_unchanged=True)
+        return state
+    except BaseException as exc:
+        message = str(exc)
+        if client is not None and getattr(client, 'serial', None):
+            message = message.replace(client.serial, '<bound-device>')
+        phase('error', failed_phase=state['phase'], error=type(exc).__name__ + ': ' + message)
+        raise RuntimeError(state['error']) from None
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('plan', type=Path)
+    parser.add_argument('--execute', action='store_true')
+    args = parser.parse_args(argv)
+    os.umask(0o077)
+    plan, image, padded, primary = load_plan(args.plan)
+    print(json.dumps({'file_preflight_passed': True, 'partition': 'recovery',
+                      'image_sha256': digest(image), 'image_bytes': len(image),
+                      'write_sectors': len(padded) // SECTOR, 'execute': args.execute}), flush=True)
+    if args.execute:
+        def alarm(signum, frame):
+            raise TimeoutError('Whole transaction deadline reached; no retry or reboot')
+        previous = signal.signal(signal.SIGALRM, alarm)
+        signal.alarm(TRANSACTION_TIMEOUT)
+        try:
+            result = execute(plan, image, padded, primary)
+            print(json.dumps(result), flush=True)
+        finally:
+            signal.alarm(0)
+            signal.signal(signal.SIGALRM, previous)
+    return 0
+
+
+if __name__ == '__main__':
+    try:
+        sys.exit(main())
+    except Exception as exc:
+        print(json.dumps({'error': type(exc).__name__ + ': ' + str(exc),
+                          'reset_sent': False}), file=sys.stderr)
+        sys.exit(1)

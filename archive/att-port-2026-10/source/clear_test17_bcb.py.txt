@@ -1,0 +1,49 @@
+#!/usr/bin/env python3
+"""One guarded first-sector BCB clear. No boot/recovery write or reset."""
+from pathlib import Path
+import hashlib,json,os,signal
+from firehose_boot_test import BootWriter,save_state
+ROOT=Path(__file__).resolve().parent
+BEFORE='f413538986a6a7d5b21fb83c0271f77d60d091074331edff25298f99759f052f'
+ZERO='30e14955ebf1352266dc2ff8067e68104607e750abb9d3b36582b8af909fcb58'
+SHA=lambda b:hashlib.sha256(b).hexdigest()
+os.umask(0o077)
+out=ROOT/'test17-clear-bcb';out.mkdir(mode=0o700,exist_ok=False)
+state={'write_started':False,'program_ack':False,'readback_verified':False,'reset_sent':False}
+def save():save_state(out/'transaction.json',state)
+def deadline(*unused):raise TimeoutError('BCB clear deadline; no retry/reset')
+signal.signal(signal.SIGALRM,deadline);signal.alarm(90)
+save()
+with (out/'firehose.xml.log').open('xb') as log:
+ c=BootWriter(log)
+ try:
+  c.configure()
+  c.read(0,14,out/'gpt.bin')
+  assert SHA((out/'gpt.bin').read_bytes())=='7f1e4fd44e69e004189f0256ce6d35addfb1e3dbfe1cd55bfd2047b580b1e891'
+  c.read(18626584,2048,out/'misc-before.bin')
+  before=(out/'misc-before.bin').read_bytes()
+  expected=bytearray(1048576);expected[:13]=b'boot-recovery';expected[64:73]=b'recovery\n'
+  assert before==bytes(expected) and SHA(before)==BEFORE
+  assert before==(ROOT/'test17-usb-supplier-full-before/misc.bin').read_bytes()
+  assert SHA((ROOT/'misc.bin').read_bytes())==ZERO
+  cleared=bytearray(before);cleared[:13]=b'\0'*13;cleared[64:73]=b'\0'*9
+  assert SHA(cleared)==ZERO and cleared[512:]==before[512:]
+  c.set_write_mode(True)
+  xml=b'<?xml version="1.0" ?><data><program SECTOR_SIZE_IN_BYTES="512" physical_partition_number="0" start_sector="18626584" num_partition_sectors="1" /></data>'
+  state['write_started']=True;save()
+  log.write(b'TX '+xml+b'\n');log.flush()
+  assert c.ep_out.write(xml,timeout=3000)==len(xml)
+  c.response(rawmode=True)
+  assert c.ep_out.write(bytes(cleared[:512]),timeout=10000)==512
+  assert c.ep_out.write(b'',timeout=3000)==0
+  c.response(rawmode=False,timeout=30)
+  state['program_ack']=True;save()
+  c.set_write_mode(False)
+  c.read(18626584,2048,out/'misc-after.bin')
+  after=(out/'misc-after.bin').read_bytes()
+  assert after==bytes(cleared) and SHA(after)==ZERO
+  state.update(readback_verified=True,changed_bytes=22,start_sector=18626584,sectors=1,before_sha256=BEFORE,after_sha256=ZERO)
+  save();print(json.dumps(state))
+ except BaseException as exc:
+  state['error']=type(exc).__name__+': '+str(exc);save();raise
+ finally:c.close()

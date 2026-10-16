@@ -1,0 +1,37 @@
+#!/usr/bin/env python3
+from pathlib import Path
+import hashlib,json
+r=Path(__file__).resolve().parent
+h=lambda b:hashlib.sha256(b).hexdigest()
+name='test16-runtime-logs';prev='test15-after-async-green'
+im=r/'prepared/test-16-runtime-logs-boot-adb-only.img';data=im.read_bytes();pad=data+b'\0'*(-len(data)%512)
+v=json.loads(im.with_suffix('.validation.json').read_text());assert h(data)==v['image_sha256']
+old=(r/'hardware-tests'/(prev+'-full-after')/'boot.bin').read_bytes();assert h(old)=='4dbad643723bb189b72b5afa63178ba00eb00afe5b439b56f58252f0d5bf49e0'
+spec=json.loads((r/(prev+'-independent-audit.json')).read_text());spec.update(image_sha256=h(data),padded_sha256=h(pad),expected_full_boot_before_sha256=h(old),expected_full_boot_after_sha256=h(pad+old[len(pad):]),raw_changed_bytes=0,source_for_raw_comparison='Test15',kernel_identical_to_test15=True,cache_backup_sha256=v['verified_cache_backup_sha256'],ramdisk_added_runtime_logging=True)
+spec['dt_ramdisk_cmdline_unchanged']=False
+spec.pop('all_690_pointers_unchanged_from_test14');spec['all_690_pointers_unchanged_from_test15']=True
+(r/(name+'-independent-audit.json')).write_text(json.dumps(spec,indent=2)+'\n')
+for loc in ['local','remote']:
+ p=json.loads((r/(prev+'-'+loc+'-plan.json')).read_text());p.update(image=p['image'].replace('test-15-after-async-green','test-16-runtime-logs'),image_sha256=h(data),output=p['output'].replace(prev,name),diagnostic_reason='Keep Test15 kernel/USB exact; add independent bounded RAM log collection and persistence to new private directory on verified backed-up ext4 cache.')
+ (r/(name+'-'+loc+'-plan.json')).write_text(json.dumps(p,indent=2)+'\n')
+for oldfile,newfile in [('run_test15.py','run_test16.py'),('reset_test15.py','reset_test16.py'),('capture_test15_adb.py','capture_test16_adb.py')]:
+ s=(r/oldfile).read_text().replace('test15','test16').replace('Test15','Test16').replace('after-async-green','runtime-logs').replace('test-15','test-16')
+ s=s.replace('66737d4e93f3387bfbaee67b197916577b54b311b778cad5475264a0b70d6334',h(data)).replace('4dbad643723bb189b72b5afa63178ba00eb00afe5b439b56f58252f0d5bf49e0',spec['expected_full_boot_after_sha256'])
+ s=s.replace('Final green after off supports global async wait return, not userspace execution. Capture logs if adb appears; temporary Test13 safeguards remain.','Capture adb immediately if available; otherwise retrieve dedicated cache diagnostics after owner EDL reentry. Temporary Test13 safeguards remain.')
+ if oldfile=='run_test15.py':
+  anchor="values=f.load_plan(root/{PLAN!r})"
+  check="""cache=root/'test16-cache-before'
+cm=json.loads((cache/'backup.json').read_text());cv=json.loads((cache/'local-verification.json').read_text())
+assert cm['complete'] and cv['full_cache_backup_verified_on_both_macs']
+assert cm['raw_sha256']==cv['raw_sha256']==spec['cache_backup_sha256']
+assert cm['bytes']==cv['bytes']==1718616064
+ch=hashlib.sha256()
+with (cache/'cache.bin').open('rb') as cf:
+    for chunk in iter(lambda:cf.read(1048576),b''):ch.update(chunk)
+assert ch.hexdigest()==spec['cache_backup_sha256']
+"""
+  assert s.count(anchor)==1;s=s.replace(anchor,check+anchor)
+ (r/newfile).write_text(s)
+s=(r/'clear_test15_bcb.py').read_text().replace('test15-clear-bcb','test16-clear-bcb').replace('test15-after-async-green-full-before','test16-runtime-logs-full-before')
+(r/'clear_test16_bcb.py').write_text(s)
+print(json.dumps({'image_sha256':h(data),'full_boot_after_sha256':spec['expected_full_boot_after_sha256'],'cache_backup_gate':True}))

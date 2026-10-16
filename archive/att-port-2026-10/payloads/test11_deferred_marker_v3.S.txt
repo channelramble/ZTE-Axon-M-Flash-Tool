@@ -1,0 +1,99 @@
+/* Diagnostic-only code for the unused, blacklisted msm_pil_init region.
+ * Existing initcall entry stays a harmless return; hooks enter at +8 onward.
+ * All external calls are linked by a constrained CALL26-only local builder.
+ */
+.text
+.globl _start, pre_enable_marker, post_flush_marker, green_sync
+_start:
+    mov w0, wzr
+    ret
+
+pre_enable_marker:
+    stp x29, x30, [sp, #-16]!
+    mov x29, sp
+    mov w0, wzr
+    bl green_sync
+    cbz w0, .Lenable
+    mov w0, #500
+    bl msleep
+    mov w0, #255
+    bl green_sync
+    mov w0, #500
+    bl msleep
+    mov w0, wzr
+    bl green_sync
+.Lenable:
+    ldp x29, x30, [sp], #16
+    mov w8, #1
+    ret
+
+post_flush_marker:
+    stp x29, x30, [sp, #-16]!
+    mov x29, sp
+    mov w0, #255
+    bl green_sync
+    ldp x29, x30, [sp], #16
+    mov w0, wzr
+    ret
+
+/* w0=0/255. Return1 if matching registered LED found, else0.
+ * No list lock spans sleep, queue_work_on or flush_workqueue.
+ */
+green_sync:
+    stp x29, x30, [sp, #-48]!
+    stp x19, x20, [sp, #16]
+    stp x21, x22, [sp, #32]
+    mov x29, sp
+    mov w19, w0
+    ldr x0, .Llock
+    bl down_read
+    ldr x20, .Lhead
+    ldr x21, [x20]
+    mov w22, #256
+.Lloop:
+    subs w22, w22, #1
+    b.eq .Lmissing
+    cmp x21, x20
+    b.eq .Lmissing
+    sub x0, x21, #0x48
+    ldr x0, [x0]
+    cbz x0, .Lnext
+    adr x1, .Lgreen
+    bl strcmp
+    cbnz w0, .Lnext
+    sub x0, x21, #0x48
+    ldr x8, [x0, #0x18]
+    ldr x9, .Lsetter
+    cmp x8, x9
+    b.ne .Lnext
+    ldr w8, [x0, #0xc]
+    cmp w8, #255
+    b.ne .Lnext
+    ldr w8, [x0, #0x1e8]
+    cmp w8, #4
+    b.ne .Lnext
+    str w19, [x0, #8]
+    mov w1, w19
+    bl __qpnp_led_work
+    mov w19, #1
+    b .Lunlock
+.Lnext:
+    ldr x21, [x21]
+    b .Lloop
+.Lmissing:
+    mov w19, wzr
+.Lunlock:
+    ldr x0, .Llock
+    bl up_read
+    mov w0, w19
+    ldp x21, x22, [sp, #32]
+    ldp x19, x20, [sp, #16]
+    ldp x29, x30, [sp], #48
+    ret
+.balign 8
+.space 4 /* Cave base is4mod8; align absolute64-bit literal addresses. */
+.Llock: .quad 0xffffff80098e7f20
+.Lhead: .quad 0xffffff80098e7f48
+.Lsetter: .quad 0xffffff8008a23c54
+
+.Lgreen: .asciz "green"

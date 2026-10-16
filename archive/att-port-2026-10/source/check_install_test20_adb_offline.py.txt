@@ -1,0 +1,80 @@
+#!/usr/bin/env python3
+"""Local temporary-file gate and gzip framing checks. Never constructs Install."""
+import copy
+import gzip
+import hashlib
+import importlib.util
+import json
+import os
+from pathlib import Path
+import shlex
+import subprocess
+import sys
+import tempfile
+
+ROOT=Path(__file__).resolve().parent
+path=ROOT/'install_test20_adb.py'
+spec=importlib.util.spec_from_file_location('installer_under_review',path)
+m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
+checks=[]
+def check(name,condition):
+ if not condition:raise AssertionError(name)
+ checks.append({'check':name,'passed':True})
+def reject(name,fn):
+ try:fn()
+ except (AssertionError,FileNotFoundError,KeyError,ValueError) as error:
+  checks.append({'check':name,'passed':True,'rejected_by':type(error).__name__})
+ else:raise AssertionError(name)
+
+with tempfile.TemporaryDirectory(prefix='axon-installer-offline-review-') as temp:
+ d=Path(temp);m.PKG=d/'mock-package';m.PKG.mkdir()
+ obj=object.__new__(m.Install);obj.out=d/'mock-install';obj.journal=obj.out/'state.json'
+ # No constructor or device transport is invoked. Authorization exists only
+ # inside this temporary mock package, never in a real staged package.
+ reject('missing explicit authorization rejects first stage',lambda:obj.begin('recovery'))
+ check('missing authorization creates no install state',not obj.out.exists())
+ auth={'explicit_clean_install_approved':True,'userdata_erasure_approved':True,
+       'image_sha256':{k:v[2] for k,v in m.FILES.items()},'userdata_geometry':list(m.GEOMETRY['userdata']),
+       'owner_instruction':'MOCK ONLY - local temporary gate test, never hardware authorization'}
+ def put(value):(m.PKG/'authorization.json').write_text(json.dumps(value))
+ bad=copy.deepcopy(auth);bad['userdata_erasure_approved']=False;put(bad)
+ reject('userdata erasure permission cannot be omitted',lambda:obj.begin('recovery'))
+ bad=copy.deepcopy(auth);bad['image_sha256']['system']='0'*64;put(bad)
+ reject('different package hash rejected',lambda:obj.begin('recovery'))
+ bad=copy.deepcopy(auth);bad['userdata_geometry'][1]+=1;put(bad)
+ reject('different userdata geometry rejected',lambda:obj.begin('recovery'))
+ put(auth)
+ reject('cannot start with system before recovery',lambda:obj.begin('system'))
+ state=obj.begin('recovery')
+ check('first stage journals started phase before work',json.loads(obj.journal.read_text())['started_phase']=='recovery')
+ reject('interrupted first stage cannot retry automatically',lambda:obj.begin('recovery'))
+ obj.finish('recovery',state,{'mock':True})
+ reject('cannot skip system to format userdata',lambda:obj.begin('userdata'))
+ state=obj.begin('system');check('next stage allowed only in exact order',state['completed']==['recovery'] and state['started_phase']=='system')
+ for name in m.GEOMETRY:
+  guard=obj.guard_script(name)
+  check(name+' helper guards fixed block identity and mount aliases',all(text in guard for text in
+        ('PATH=/system/bin','[ -b '+obj.node(name)+' ]','[ ! -L '+obj.node(name)+' ]','readlink -f','/proc/mounts')))
+
+ # Actual local gzip/head/dd pipeline checks use only a regular temporary file.
+ # Native phone commands were separately exercised by root; this verifies
+ # stream framing assumptions, including the valid-short-stream blind spot.
+ cap=8192;tail=b'TAIL-PRESERVED'*100;raw=os.urandom(cap);expected=raw+tail
+ variants={'exact':gzip.compress(raw),'crc_bad':gzip.compress(raw)[:-8]+b'\0'*8,
+           'truncated':gzip.compress(raw)[:-7],'valid_short':gzip.compress(raw[:1000]),
+           'oversized':gzip.compress(raw+os.urandom(200000))}
+ for name,compressed in variants.items():
+  target=d/('pipeline-'+name);target.write_bytes(b'\0'*cap+tail)
+  command='set -eu; set -o pipefail; gzip -dc | head -c '+str(cap)+' | dd of='+shlex.quote(str(target))+' bs=1048576 conv=notrunc; echo WRITE_COMPLETE'
+  r=subprocess.run(['/bin/bash','-c',command],input=compressed,capture_output=True,timeout=10)
+  actual=target.read_bytes();check(name+' cannot write past explicit byte cap',actual[cap:]==tail and len(actual)==len(expected))
+  if name=='exact':check('exact stream satisfies marker and full expected bytes',r.returncode==0 and b'WRITE_COMPLETE' in r.stdout and actual==expected)
+  elif name=='valid_short':check('valid-short gzip requires full readback hash despite successful pipeline',r.returncode==0 and actual!=expected)
+  else:check(name+' rejected by pipeline or full readback',r.returncode!=0 or b'WRITE_COMPLETE' not in r.stdout or actual!=expected)
+
+result={'passed':True,'checks':checks,'installer_sha256':hashlib.sha256(path.read_bytes()).hexdigest(),
+        'scope':'Temporary local authorization/state tests and host gzip pipeline tests; no Install constructor, phone or remote calls.',
+        'real_authorization_created':False,'phone_operations':False}
+out=ROOT/'test20-installer-offline-review-checks.json'
+with out.open('x') as f:json.dump(result,f,indent=2);f.write('\n')
+print(json.dumps({'passed':True,'checks':len(checks),'installer_sha256':result['installer_sha256']}))

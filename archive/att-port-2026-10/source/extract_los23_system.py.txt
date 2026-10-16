@@ -1,0 +1,79 @@
+#!/usr/bin/env python3
+"""Offline sparse reconstruction of this pinned full-new LOS system payload.
+No device access. Reject incremental commands, overlap, missing ranges, bad CRC,
+wrong stream length, low disk space, and existing outputs.
+"""
+from pathlib import Path
+import hashlib,json,os,shutil,struct,subprocess,threading,zipfile
+ROOT=Path(__file__).resolve().parent
+ZIP_SHA='d9b4caca37dc906c4f9b4700bc8d24fe6fe5757e8eeba7c45fe2c55143883456'
+def digest_file(p):
+ h=hashlib.sha256()
+ with p.open('rb') as f:
+  for b in iter(lambda:f.read(1048576),b''):h.update(b)
+ return h.hexdigest()
+def main():
+ os.umask(0o077)
+ src=ROOT/'lineage-23.2-20261006-UNOFFICIAL-fujisan.zip'
+ out=ROOT/'los23-system-original';assert not out.exists()
+ assert digest_file(src)==ZIP_SHA
+ with zipfile.ZipFile(src) as z:
+  raw=z.read('system.transfer.list');lines=raw.decode().splitlines()
+  assert lines[0]=='4' and lines[2:4]==['0','0']
+  transfers=[];all_ranges=[];written=0;new_bytes=0
+  for line in lines[4:]:
+   op,arg=line.split();assert op in ('new','zero','erase')
+   ns=list(map(int,arg.split(',')));assert ns[0]==len(ns)-1 and ns[0]%2==0
+   ranges=list(zip(ns[1::2],ns[2::2]));assert all(0<=a<b<=1703936 for a,b in ranges)
+   transfers.append((op,ranges));all_ranges.extend(ranges)
+   if op!='erase':written+=sum(b-a for a,b in ranges)
+   if op=='new':new_bytes+=sum(b-a for a,b in ranges)*4096
+  assert written==int(lines[1])==654324 and new_bytes==2621607936
+  end=0
+  for a,b in sorted(all_ranges):assert a==end;end=b
+  total=end*4096;assert total==6979321856
+  assert shutil.disk_usage(ROOT).free>new_bytes+2*1024**3
+  out.mkdir(mode=0o700);(out/'system.transfer.list').write_bytes(raw)
+  (out/'updater-script').write_bytes(z.read('META-INF/com/google/android/updater-script'))
+  errors=[];feed_hash=hashlib.sha256();stream_hash=hashlib.sha256();ranges_hash=[]
+  with (out/'brotli.stderr').open('xb') as err:
+   proc=subprocess.Popen(['/opt/homebrew/bin/brotli','--decompress','--stdout'],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=err)
+   def feed():
+    try:
+     with z.open('system.new.dat.br') as f:
+      for b in iter(lambda:f.read(1048576),b''):feed_hash.update(b);proc.stdin.write(b)
+    except BaseException as e:errors.append(repr(e))
+    finally:proc.stdin.close()
+   thread=threading.Thread(target=feed,daemon=True);thread.start()
+   try:
+    with (out/'system.img').open('xb') as f:
+     f.truncate(total)
+     for op,ranges in transfers:
+      if op!='new':continue
+      for a,b in ranges:
+       left=(b-a)*4096;f.seek(a*4096);h=hashlib.sha256()
+       while left:
+        data=proc.stdout.read(min(left,1048576));assert data,'Truncated decompressed stream'
+        assert len(data)<=left;f.write(data);h.update(data);stream_hash.update(data);left-=len(data)
+       ranges_hash.append({'start_block':a,'end_block':b,'sha256':h.hexdigest()})
+     assert proc.stdout.read(1)==b'','Excess decompressed bytes'
+     f.flush();os.fsync(f.fileno())
+    thread.join(timeout=10);assert not thread.is_alive() and not errors,errors
+    assert proc.wait(timeout=10)==0
+   finally:
+    if proc.poll() is None:proc.kill();proc.wait()
+  image=out/'system.img'
+  with image.open('rb') as f:
+   f.seek(1024);sb=f.read(1024)
+  assert sb[0x38:0x3a]==b'\x53\xef' and 1024<<struct.unpack_from('<I',sb,0x18)[0]==4096
+  assert struct.unpack_from('<I',sb,4)[0]==end
+  # Re-read every written range; zero/discard regions are holes in a new file.
+  with image.open('rb') as f:
+   for item in ranges_hash:
+    f.seek(item['start_block']*4096);left=(item['end_block']-item['start_block'])*4096;h=hashlib.sha256()
+    while left:data=f.read(min(left,1048576));assert data;h.update(data);left-=len(data)
+    assert h.hexdigest()==item['sha256']
+  result={'source_zip_sha256':ZIP_SHA,'source_zip_crc_verified':True,'transfer_sha256':hashlib.sha256(raw).hexdigest(),'brotli_payload_sha256':feed_hash.hexdigest(),'new_stream_sha256':stream_hash.hexdigest(),'image_sha256':digest_file(image),'image_bytes':total,'allocated_bytes':image.stat().st_blocks*512,'new_data_bytes':new_bytes,'range_readbacks_verified':True,'range_hashes':ranges_hash,'ext4_superblock_verified':True,'phone_operations':False,'firmware_patched':False,'erase_ranges_reconstructed_as_zero_holes':True}
+  (out/'manifest.json').write_text(json.dumps(result,indent=2)+'\n')
+  print(json.dumps({k:v for k,v in result.items() if k!='range_hashes'},indent=2))
+if __name__=='__main__':main()

@@ -1,0 +1,45 @@
+#!/usr/bin/env python3
+from pathlib import Path
+import os,sys,json,struct,zlib,signal
+os.umask(0o077)
+p=Path(sys.argv[1]);sys.path.insert(0,str(p))
+from check_backups import read_header,read_gpt,check_files,file_hash
+from firehose_read import Reader
+
+def timeout(signum,frame):
+    raise TimeoutError('Backup session exceeded 210 seconds')
+signal.signal(signal.SIGALRM,timeout);signal.alarm(210)
+primary=(p/'gpt_main0.bin').read_bytes();header=read_header(primary);gpt=read_gpt(primary)
+bh=(p/'gpt-backup-header.bin').read_bytes()
+f=struct.unpack_from('<8sIIIIQQQQ16sQIII',bh)
+magic,rev,size,crc,reserved,current,alternate,first,last,guid,entry_lba,count,width,array_crc=f
+if magic!=b'EFI PART' or rev!=0x10000 or not 92<=size<=512 or reserved:raise ValueError('Invalid backup GPT header')
+copy=bytearray(bh[:size]);copy[16:20]=b'\0'*4
+if zlib.crc32(copy)&0xffffffff!=crc:raise ValueError('Backup GPT header CRC failed')
+pf=struct.unpack_from('<8sIIIIQQQQ16sQIII',primary,512)
+if current!=header['backup_header_sector'] or alternate!=1 or (first,last,guid,count,width,array_crc)!=(pf[7],pf[8],pf[9],pf[11],pf[12],pf[13]):raise ValueError('GPT metadata mismatch')
+if not last<entry_lba<=current or entry_lba*512+count*width>current*512:raise ValueError('Backup GPT array bounds invalid')
+if not 1<=current-entry_lba+1<=4096:raise ValueError('Unexpected backup GPT extent; inspect before reading')
+with (p/'logs/12-backups.xml.log').open('xb') as log:
+    reader=Reader(log)
+    try:
+        reader.configure()
+        reader.read(entry_lba,current-entry_lba+1,p/'gpt_backup0.bin')
+        backup=(p/'gpt_backup0.bin').read_bytes();array=backup[:count*width]
+        if zlib.crc32(array)&0xffffffff!=array_crc:raise ValueError('Backup GPT array CRC failed')
+        if array!=primary[header['array_start_bytes']:header['array_end_bytes']]:raise ValueError('GPT partition arrays differ')
+        if backup[(current-entry_lba)*512:][:size]!=bh[:size]:raise ValueError('Backup GPT header changed between reads')
+        summary={'primary_header_crc_valid':True,'primary_array_crc_valid':True,'backup_header_crc_valid':True,'backup_array_crc_valid':True,'partition_arrays_identical':True,'disk_bytes':gpt['disk_bytes'],'partition_count':gpt['partition_count'],'backup_dump_start_sector':entry_lba,'backup_dump_sectors':current-entry_lba+1,'partitions':{name:gpt['partitions'][name] for name in ('boot','recovery','misc')}}
+        (p/'gpt-validation.json').write_text(json.dumps(summary,indent=2)+'\n')
+        print('Both GPT copies validated; partition arrays match',flush=True)
+        for name in ('boot','recovery','misc'):
+            part=gpt['partitions'][name]
+            reader.read(part['start_sector'],part['sectors'],p/(name+'.bin'))
+        checked=check_files(gpt,p)
+        manifest={'gpt':summary,'backups':checked,'phone_storage_writes':False,'files':{name:{'bytes':(p/name).stat().st_size,'sha256':file_hash(p/name)} for name in ('gpt_main0.bin','gpt_backup0.bin','boot.bin','recovery.bin','misc.bin')}}
+        (p/'backup-manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')
+        print('Complete backup lengths and hashes verified',flush=True)
+        print(json.dumps({'misc_boot_recovery_flag':checked['misc']['boot_recovery_flag'],'misc_command_present':checked['misc']['bcb_command_present']}),flush=True)
+    finally:
+        reader.close()
+signal.alarm(0)

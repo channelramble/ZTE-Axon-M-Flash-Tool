@@ -1,0 +1,153 @@
+#!/usr/bin/env python3
+"""Prepare exact GPU-memory-accounting unavailable-result diagnostic payload.
+
+No device operations or system-image writes. The target is one user-space
+statistics API; GPU rendering, the kernel and generic BPF checks are untouched.
+"""
+from pathlib import Path
+import argparse
+import hashlib
+import json
+import struct
+
+BASE = Path(__file__).resolve().parent
+SOURCE = BASE / 'test22-gpu-meminfo-analysis/libmeminfo.original.so'
+OUTPUT = BASE / 'prepared/test22-gpu-meminfo-v1'
+SOURCE_SHA = 'c818331ef3c3ee086fd832a3f06c2039259d16023f17bd7e2dba4d8bf677e64d'
+OUTPUT_SHA = '040e0c8f97434b8d101914901f55b346c4b27eee8dc82b43f2a766258245a028'
+SOURCE_BYTES = 149304
+FUNCTION_START, FUNCTION_END = 0x140fc, 0x14398
+FUNCTION_SHA = '54312b7dc9f76038ac57db1466e89a9890b924555983a2eb4f81ca9844701a5d'
+HELPER_START, HELPER_END = 0x176d0, 0x178e4
+HELPER_SHA = 'd89f47b356deddaae25803541839be088a467ab14df285aed76f0bd9954f7492'
+SITE, TARGET = 0x1419c, 0x141fc
+OLD, NEW = bytes.fromhex('4d0d0094'), bytes.fromhex('18000014')
+
+
+def sha(data):
+    return hashlib.sha256(data).hexdigest()
+
+
+def require(condition, message):
+    if not condition:
+        raise ValueError(message)
+
+
+def branch_destination(site, word, opcode):
+    require(word >> 26 == opcode, 'wrong branch opcode')
+    immediate = word & 0x3ffffff
+    if immediate & 0x2000000:
+        immediate -= 0x4000000
+    return site + immediate * 4
+
+
+def patch(data):
+    require(len(data) == SOURCE_BYTES and sha(data) == SOURCE_SHA,
+            'source must be exact Test20 system lib64/libmeminfo.so')
+    require(data[:6] == b'\x7fELF\x02\x01', 'expected ELF64 little endian')
+    header = struct.unpack_from('<16sHHIQQQIHHHHHH', data)
+    require(header[2] == 183, 'expected AArch64')
+    loads = [struct.unpack_from('<IIQQQQQQ', data, header[5] + header[9] * i)
+             for i in range(header[10])]
+    require(any(p[0] == 1 and p[1] & 1 and p[2] == p[3]
+                and p[2] <= FUNCTION_START and HELPER_END <= p[2] + p[5]
+                for p in loads), 'function VA/file executable mapping differs')
+    require(sha(data[FUNCTION_START:FUNCTION_END]) == FUNCTION_SHA,
+            'ReadProcessGpuUsageKb context differs')
+    require(sha(data[HELPER_START:HELPER_END]) == HELPER_SHA,
+            'BPF abort helper context differs')
+    context = {
+        0x1415c: 'e81700b9',  # initial map fd -1
+        0x14184: 'cb340094',  # BPF_OBJ_GET syscall
+        0x14194: 'e9ddff97',  # unique_fd reset/adoption
+        SITE: OLD.hex(),
+        TARGET: '13008052',  # native false result W19=0
+        0x14200: '12000014',  # jump to native fd cleanup
+        0x14248: '9e330094',  # errno pointer
+        0x1424c: 'f51740b9',  # load held map fd
+        0x14258: 'bf060031',  # test fd == -1
+        0x1425c: 'a0010054',  # skip close when fd == -1
+        0x14280: 'ac330094',  # android_fdsan_close_with_tag
+        0x1428c: 'b1330094',  # native close fallback
+        0x14290: '970200b9',  # restore errno
+        0x142a4: 'e003132a',  # return W19
+        0x142bc: 'c0035fd6',  # return after native stack/register restoration
+        0x176f0: '080040b9',  # BPF helper loads fd
+        0x176f4: 'a80df837',  # invalid fd -> abort at0x178a8
+        0x178a8: 'e2260094',  # abort call observed in crash stack
+    }
+    for offset, expected in context.items():
+        require(data[offset:offset + 4].hex() == expected,
+                f'instruction context differs at {offset:#x}')
+    require(branch_destination(SITE, struct.unpack('<I', OLD)[0], 0b100101) == HELPER_START,
+            'old BL destination differs')
+    require(branch_destination(SITE, struct.unpack('<I', NEW)[0], 0b000101) == TARGET,
+            'new B destination differs')
+    result = data[:SITE] + NEW + data[SITE + 4:]
+    require(len(result) == len(data), 'binary length changed')
+    require([i for i, (a, b) in enumerate(zip(data, result)) if a != b]
+            == [0x1419c, 0x1419d, 0x1419f], 'unexpected byte differences')
+    require(sha(result) == OUTPUT_SHA, 'output pin differs')
+    return result
+
+
+def report(data, result):
+    return {
+        'classification': 'diagnostic compatibility fallback: GPU memory statistics unavailable',
+        'target': '/system/lib64/libmeminfo.so',
+        'source': str(SOURCE.relative_to(BASE)),
+        'source_sha256': sha(data), 'source_bytes': len(data),
+        'payload': 'libmeminfo.diagnostic.so',
+        'output_sha256': sha(result), 'output_bytes': len(result),
+        'original_copy': 'libmeminfo.original.so',
+        'source_function': {'symbol': 'android::meminfo::ReadProcessGpuUsageKb(unsigned int,unsigned int,unsigned long*)',
+                            'start': hex(FUNCTION_START), 'end_exclusive': hex(FUNCTION_END),
+                            'sha256': FUNCTION_SHA},
+        'patch': {'file_offset_and_va': hex(SITE), 'before': OLD.hex(), 'after': NEW.hex(),
+                  'before_instruction': 'bl 0x176d0', 'after_instruction': 'b 0x141fc',
+                  'changed_byte_offsets': ['0x1419c', '0x1419d', '0x1419f']},
+        'observed_failure': 'BPF map retrieval yields invalid fd; constructor aborts at0x178a8 before caller can check isValid(). Exact errno/path cause has not been captured.',
+        'semantics': [
+            'Retains existing read-only BPF_OBJ_GET and unique_fd adoption',
+            'Enters native false return and fd cleanup at0x141fc, including errno/canary/register restoration',
+            'Leaves output size pointer untouched, as the existing native invalid-map error path does',
+            'Does not manufacture zero usage or successful accounting',
+            'ReadGpuTotalUsageKb wrapper inherits false; JNI caller has a native unavailable result',
+        ],
+        'preserved': ['All other ELF bytes and metadata', 'Generic BPF abort helper',
+                      'ReadPerProcessGpuMem and every other statistics function',
+                      'GPU driver, shader files, rendering, allocations and kernel'],
+        'limitations': [
+            'Always returns false for ReadProcessGpuUsageKb, including if a map later becomes available',
+            'System-wide/per-process queries using this API cannot report GPU memory usage',
+            'ReadPerProcessGpuMem is separate and unchanged; later use could encounter the same unavailable-map abort',
+            'Underlying missing/inaccessible map cause is not repaired',
+            'No runtime boot-success assertion; existing processes need new library mapping before testing',
+            'Only the exact ARM64 system library is prepared; ARM32/vendor copies are untouched',
+        ],
+        'supporting_source': 'https://android.googlesource.com/platform/system/memory/libmeminfo/+/refs/heads/main/sysmeminfo.cpp',
+        'source_note': 'Supporting source only; exact own ELF, method body and abort helper separately pinned and decoded',
+        'phone_or_image_operations': False,
+    }
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--build', action='store_true', help='create new local payload directory')
+    args = parser.parse_args()
+    data = SOURCE.read_bytes()
+    result = patch(data)
+    if args.build:
+        OUTPUT.mkdir(mode=0o700)
+        for name, content in [('libmeminfo.original.so', data), ('libmeminfo.diagnostic.so', result),
+                              ('manifest.json', (json.dumps(report(data, result), indent=2) + '\n').encode())]:
+            with (OUTPUT / name).open('xb') as handle:
+                handle.write(content)
+        print(json.dumps({'built': str(OUTPUT), 'output_sha256': sha(result)}))
+    else:
+        print(json.dumps({'files_only_validated': True, 'output_sha256': sha(result),
+                          'build_requested': False}))
+
+
+if __name__ == '__main__':
+    main()

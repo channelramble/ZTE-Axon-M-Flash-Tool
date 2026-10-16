@@ -1,0 +1,120 @@
+#!/usr/bin/env python3
+"""Move green immediately after deferred_probe_initcall, still within level6."""
+from collections import Counter
+import gzip
+import json
+import os
+from pathlib import Path
+import struct
+import sys
+
+ROOT = Path(__file__).resolve().parent
+sys.path.insert(0, str(ROOT.parent / 'ZTE-Axon-M-Flash-Tool/scripts'))
+from fujisan_image import BootImage, gzip_member, kernel_dtbs, report, sign_image
+import prepare_test07_early_led as original
+
+SOURCE_SHA = 'fd9640cdb44b3c5d9081cb91129020e5d2afbe619fdd21b9c33385d055d80568'
+SOURCE_RAW_SHA = '3ac4beba7de46c1a10e89ce42adcb3dc46d0d987fb48d009917301ddea9ee107'
+OLD_INDEX = 612
+NEW_INDEX = 613
+
+
+def main():
+    os.umask(0o077)
+    source = ROOT / 'prepared/test-09-end-level6-green-boot-adb-only.img'
+    target = ROOT / 'prepared/test-10-after-deferred-green-boot-adb-only.img'
+    outputs = [target, target.with_suffix('.validation.json'), target.with_suffix('.img.json')]
+    if any(p.exists() for p in outputs):
+        raise FileExistsError('Refusing to overwrite an artifact')
+    data = source.read_bytes()
+    if original.sha(data) != SOURCE_SHA:
+        raise ValueError('Source is not the verified Test09 green image')
+    boot = BootImage(data)
+    _, raw, tail = gzip_member(boot.kernel)
+    if original.sha(raw) != SOURCE_RAW_SHA:
+        raise ValueError('Source raw kernel differs')
+    reference = (ROOT / 'prepared/test-05-qce-disabled-boot.img').read_bytes()
+    if original.sha(reference) != original.SOURCE_SHA:
+        raise ValueError('Original initcall order reference differs')
+    _, original_raw, _ = gzip_member(BootImage(reference).kernel)
+    if original.sha(original_raw) != original.RAW_SHA:
+        raise ValueError('Original kernel guard failed')
+    analysis = ROOT / 'kernel-analysis'
+    calls_data = (analysis / 'twrp-3.7.0.initcalls.json').read_bytes()
+    pointers, dependencies = original.guard_table(original_raw,
+        (analysis / 'twrp-3.7.0.System.map').read_bytes(), calls_data)
+    rows = json.loads(calls_data)
+    start = original.LEVEL6 - original.IMAGE_BASE
+    others = pointers[:original.LED_INDEX] + pointers[original.LED_INDEX + 1:]
+    current = others[:OLD_INDEX] + [original.LED_TARGET] + others[OLD_INDEX:]
+    if list(struct.unpack_from('<690Q', raw, start)) != current:
+        raise ValueError('Source permutation differs from Test09')
+    if (rows[613]['function_verified'] != 'deferred_probe_initcall'
+            or not rows[613]['sync'] or rows[614]['function_verified'] != 'fpsimd_init'
+            or OLD_INDEX != 612 or NEW_INDEX != 613):
+        raise ValueError('Expected exact final level6 LED/deferred pair')
+    others = pointers[:original.LED_INDEX] + pointers[original.LED_INDEX + 1:]
+    moved = others[:NEW_INDEX] + [original.LED_TARGET] + others[NEW_INDEX:]
+    if Counter(moved) != Counter(pointers) or moved[NEW_INDEX] != original.LED_TARGET:
+        raise ValueError('Pointer multiplicity/marker position changed unexpectedly')
+    if moved[:NEW_INDEX] + moved[NEW_INDEX + 1:] != others:
+        raise ValueError('Non-marker initcall order changed')
+    if (moved[:612] != current[:612] or moved[612:614] != current[612:614][::-1]
+            or moved[614:] != current[614:] or start + 614 * 8 != 0x174d158):
+        raise ValueError('Only adjacent final level6 pointers may swap')
+    stop = start + (NEW_INDEX + 1) * 8
+    change_start = start + OLD_INDEX * 8
+    patched = raw[:change_start] + struct.pack('<' + str(NEW_INDEX - OLD_INDEX + 1) + 'Q', *moved[OLD_INDEX:NEW_INDEX + 1]) + raw[stop:]
+    changes = [i for i, (a, b) in enumerate(zip(raw, patched)) if a != b]
+    if (not changes or any(not change_start <= i < stop for i in changes)
+            or len(raw) != len(patched)
+            or list(struct.unpack_from('<690Q', patched, start)) != moved):
+        raise ValueError('Unexpected raw-kernel changes')
+    if raw[0x636a6c:0x636a70] != bytes.fromhex('40028012'):
+        raise ValueError('Expected retained QSEE failed-probe patch')
+    _, _, trees = kernel_dtbs(boot.kernel)
+    if len(trees) != 2:
+        raise ValueError('Expected both DTs')
+    for _, tree in trees:
+        parent = tree.root
+        for name in ('soc', 'qcom,spmi@400f000', 'qcom,pmi8994@3', 'qcom,leds@d000'):
+            parent = parent.child(name)
+        if (parent.child('qcom,rgb_1').props['qcom,default-state'] != b'on\0'
+                or parent.child('qcom,rgb_2').props['qcom,default-state'] != b'off\0'):
+            raise ValueError('Green/blue defaults differ')
+    signed = sign_image(boot.rebuild(kernel=gzip.compress(patched, compresslevel=9, mtime=0) + tail),
+                        '/boot', str(ROOT / 'keys/axon-m-local.key'), str(ROOT / 'keys/axon-m-local.pem'))
+    rebuilt = BootImage(signed)
+    _, checked, checked_tail = gzip_member(rebuilt.kernel)
+    if (checked != patched or checked_tail != tail or rebuilt.ramdisk != boot.ramdisk
+            or rebuilt.cmdline != boot.cmdline or rebuilt.second != boot.second
+            or boot.rebuild(kernel=rebuilt.kernel) != rebuilt.payload):
+        raise ValueError('Unexpected non-pointer payload change')
+    info = report(signed)
+    if (not info['signature_verified'] or not info['boot_id_valid']
+            or info['signature_target'] != '/boot'
+            or any(t['free_tail_bytes'] != 8192 for t in info['dtbs'])):
+        raise ValueError('Final image validation failed')
+    v = dict(source_image=source.name, source_sha256=SOURCE_SHA,
+        image=target.name, image_bytes=len(signed), image_sha256=original.sha(signed),
+        padded_bytes=(len(signed) + 511) // 512 * 512,
+        padded_sha256=original.sha(signed + b'\0' * (-len(signed) % 512)),
+        original_raw_sha256=SOURCE_RAW_SHA, raw_sha256=original.sha(patched),
+        changed_byte_count=len(changes), changed_raw_offsets=changes,
+        permitted_interval=[hex(change_start), hex(stop)], old_led_index=OLD_INDEX, new_led_index=NEW_INDEX,
+        preceding_original_initcall=next(r['function_verified'] for r in rows if int(r['function_address'], 16) == moved[NEW_INDEX - 1]),
+        following_original_initcall=next(r['function_verified'] for r in rows if int(r['function_address'], 16) == moved[NEW_INDEX + 1]),
+        all_690_pointers_preserved=True, other_relative_order_preserved=True,
+        deferred_probe_index=612, level7_unchanged=True, only_final_level6_pair_swapped=True, code_bytes_unchanged=True, dt_tail_unchanged=True,
+        ramdisk_unchanged=True, cmdline_and_addresses_unchanged=True, dependencies=dependencies,
+        signature_verified=True, boot_id_valid=True, hardware_tested=False,
+        interpretation='Fresh green supports deferred_probe_initcall returning before the marker, with all level6 entries processed. It does not prove asynchronous work completed or driver functionality. A missing green remains conditional: delaying LED registration across deferred probing can change dependency behavior. All non-marker order is preserved; no new skips.')
+    for path, contents in ((target, signed), (outputs[1], (json.dumps(v, indent=2)+'\n').encode()),
+                           (outputs[2], (json.dumps(info, indent=2)+'\n').encode())):
+        with path.open('xb') as stream:
+            stream.write(contents)
+    print(json.dumps({k:v for k,v in v.items() if k != 'changed_raw_offsets'}, indent=2))
+
+
+if __name__ == '__main__':
+    main()

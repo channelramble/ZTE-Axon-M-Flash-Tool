@@ -1,0 +1,207 @@
+#!/usr/bin/env python3
+"""Offline tests only: fake USB endpoints, no Reader constructor/device access."""
+from pathlib import Path
+import hashlib
+import importlib.util
+import io
+import json
+import tempfile
+import unittest
+import xml.etree.ElementTree as ET
+from unittest.mock import patch
+
+ROOT = Path(__file__).resolve().parent
+spec = importlib.util.spec_from_file_location('test23_runner', ROOT / 'run_test23_edl_system.py')
+m = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(m)
+BLOCKS = m.delta_blocks((ROOT / 'test23-system-delta.json').read_bytes())
+
+
+class Endpoint:
+    def __init__(self, fail=None):
+        self.calls = []
+        self.fail = fail
+
+    def write(self, data, timeout):
+        self.calls.append((data, timeout))
+        if len(self.calls) == self.fail:
+            return max(0, len(data) - 1) if data else 1
+        return len(data)
+
+
+def writer(*, chunk=65536, fail=None, ack_fail=None):
+    obj = object.__new__(m.SystemDeltaWriter)
+    obj.writes_enabled = True
+    obj.allowed_blocks = {o: b for o, _, b in BLOCKS}
+    obj.chunk_size = chunk
+    obj.ep_out = Endpoint(fail)
+    obj.log = io.BytesIO()
+    obj.acks = []
+    def response(rawmode=None, timeout=15):
+        obj.acks.append(rawmode)
+        if len(obj.acks) == ack_fail:
+            raise TimeoutError('mock ACK failure')
+        return {'value': 'ACK'}
+    obj.response = response
+    return obj
+
+
+class Tests(unittest.TestCase):
+    def test_exact_packet_and_ack_sequence(self):
+        for offset, _, block in BLOCKS:
+            obj = writer()
+            obj.program_block(offset, block)
+            self.assertEqual(obj.acks, [True, False])
+            self.assertEqual(len(obj.ep_out.calls), 3)
+            root = ET.fromstring(obj.ep_out.calls[0][0])
+            self.assertEqual(root.find('program').attrib, {
+                'SECTOR_SIZE_IN_BYTES': '512', 'physical_partition_number': '0',
+                'start_sector': str(m.START + offset // 512), 'num_partition_sectors': '8'})
+            self.assertEqual(obj.ep_out.calls[1][0], block)
+            self.assertEqual(obj.ep_out.calls[2][0], b'')
+
+    def test_small_negotiated_chunks_keep_zlp(self):
+        obj = writer(chunk=512)
+        offset, _, block = BLOCKS[0]
+        obj.program_block(offset, block)
+        self.assertEqual(len(obj.ep_out.calls), 17)
+        self.assertEqual(b''.join(x[0] for x in obj.ep_out.calls[1::2]), block)
+        self.assertTrue(all(x[0] == b'' for x in obj.ep_out.calls[2::2]))
+
+    def test_guard_rejections_send_no_xml(self):
+        offset, _, block = BLOCKS[0]
+        cases = [(offset + 512, block), (-4096, block), (m.SIZE, block),
+                 (True, block), (offset, block[:-1]), (offset, b'\0' * 4096)]
+        for at, payload in cases:
+            obj = writer()
+            with self.assertRaises(ValueError):
+                obj.program_block(at, payload)
+            self.assertEqual(obj.ep_out.calls, [])
+        obj = writer()
+        obj.writes_enabled = False
+        with self.assertRaises(ValueError):
+            obj.program_block(offset, block)
+        self.assertEqual(obj.ep_out.calls, [])
+
+    def test_short_xml_data_and_bad_zlp_stop(self):
+        offset, _, block = BLOCKS[0]
+        for failure in (1, 2, 3):
+            obj = writer(fail=failure)
+            with self.assertRaises(RuntimeError):
+                obj.program_block(offset, block)
+            self.assertEqual(len(obj.ep_out.calls), failure)
+            self.assertNotIn(False, obj.acks)
+
+    def test_initial_and_final_ack_failure_stop(self):
+        offset, _, block = BLOCKS[0]
+        for failure, transfers in ((1, 1), (2, 3)):
+            obj = writer(ack_fail=failure)
+            with self.assertRaises(TimeoutError):
+                obj.program_block(offset, block)
+            self.assertEqual(len(obj.ep_out.calls), transfers)
+
+    def test_delta_mutation_and_duplicate_rejected(self):
+        original = (ROOT / 'test23-system-delta.json').read_bytes()
+        for data in (original + b' ', original[:-1], original.replace(b'2215178240', b'2215178241', 1)):
+            with self.assertRaises(ValueError):
+                m.delta_blocks(data)
+        parsed = json.loads(original)
+        parsed['blocks'].append(parsed['blocks'][0])
+        with self.assertRaises(ValueError):
+            m.delta_blocks(json.dumps(parsed).encode())
+
+    def test_saved_file_hash_and_size_failclosed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'file'
+            path.write_bytes(b'abc')
+            m.checked_file(path, 3, m.sha(b'abc'))
+            for size, digest in ((4, m.sha(b'abc')), (3, m.sha(b'xyz'))):
+                with self.assertRaises(ValueError):
+                    m.checked_file(path, size, digest)
+            link = Path(directory) / 'link'
+            link.symlink_to(path)
+            with self.assertRaises(ValueError):
+                m.checked_file(link, 3, m.sha(b'abc'))
+
+    def test_execute_durable_order_error_and_retry_lock(self):
+        # Tiny fake captures exercise execution control without allocating GBs.
+        for failure in ('success', 'source', 'block', 'full', 'protected_after'):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                before = root / 'before'
+                before.mkdir()
+                for name in ('audit.json', 'local-verification.json'):
+                    (before / name).write_text('{}')
+                (root / 'test23-edl-system-independent-review.json').write_text(json.dumps({
+                    'passed': True, 'runner_sha256': m.file_sha(Path(m.__file__)),
+                    'delta_sha256': m.DELTA_SHA}))
+                writes = []
+                readbacks = []
+                class Fake:
+                    def __init__(self, log): pass
+                    def configure(self): pass
+                    def close(self): pass
+                    def set_write_mode(self, enabled): self.enabled = enabled
+                    def program_block(self, offset, block):
+                        state = json.loads((root / 'test23-edl-system-write/transaction.json').read_text())
+                        assert state['write_started'] and state['in_progress_offset'] == offset
+                        assert self.enabled
+                        writes.append(offset)
+                    def read(self, start, count, path):
+                        if count == m.SECTORS:
+                            path.write_bytes(b'fake full readback')
+                            return {'sha256': m.TARGET_SHA if failure != 'full' else '0' * 64}
+                        offset = (start - m.START) * 512
+                        original = next(x for x in BLOCKS if x[0] == offset)
+                        if path.parent.name == 'original-blocks':
+                            with (ROOT / 'test22-system-v1/system.img').open('rb') as src:
+                                src.seek(offset)
+                                data = src.read(4096)
+                            if failure == 'source': data = b'X' * 4096
+                        else:
+                            assert not self.enabled
+                            data = original[2]
+                            if failure == 'block': data = b'X' * 4096
+                            readbacks.append(offset)
+                        path.write_bytes(data)
+                        return {'sha256': m.sha(data)}
+                def protected(client, directory):
+                    if directory.name == 'protected-after' and failure == 'protected_after':
+                        raise ValueError('mock protected mismatch')
+                    return {'verified': True}
+                real_check = m.checked_file
+                def check(path, size, digest):
+                    if path.name == 'system-after.bin':
+                        assert size == m.SIZE and digest == m.TARGET_SHA
+                    else:
+                        real_check(path, size, digest)
+                with patch.object(m, 'ROOT', root), patch.object(m, 'SystemDeltaWriter', Fake), \
+                     patch.object(m, 'verify_small', protected), patch.object(m, 'checked_file', check), \
+                     patch.object(m.shutil, 'disk_usage', return_value=type('Disk', (), {'free': m.SIZE * 2})()), \
+                     patch('sys.stdout', new=io.StringIO()):
+                    if failure == 'success':
+                        m.execute(BLOCKS, before, {}, {})
+                    else:
+                        with self.assertRaises(ValueError):
+                            m.execute(BLOCKS, before, {}, {})
+                    state = json.loads((root / 'test23-edl-system-write/transaction.json').read_text())
+                    self.assertFalse(state['reset_sent'])
+                    self.assertFalse(state['userdata_written'])
+                    if failure == 'success':
+                        self.assertTrue(state['complete'])
+                        self.assertEqual(writes, list(m.OFFSETS))
+                        self.assertEqual(readbacks, list(m.OFFSETS))
+                    elif failure == 'source':
+                        self.assertEqual(writes, [])
+                        self.assertFalse(state['write_started'])
+                    elif failure == 'block':
+                        self.assertEqual(writes, [m.OFFSETS[0]])
+                        self.assertEqual(state['blocks_completed'], [])
+                    else:
+                        self.assertNotIn('complete', state)
+                    with self.assertRaises(FileExistsError):
+                        m.execute(BLOCKS, before, {}, {})
+
+
+if __name__ == '__main__':
+    unittest.main()

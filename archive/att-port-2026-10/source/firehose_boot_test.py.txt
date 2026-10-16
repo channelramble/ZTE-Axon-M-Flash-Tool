@@ -1,0 +1,188 @@
+#!/usr/bin/env python3
+"""One bounded boot-partition diagnostic write, then mandatory hash readback.
+
+Default mode validates local files only. --execute requires an already loaded
+Firehose programmer. There is no erase, GPT write, misc write, or reset command.
+"""
+import argparse
+import hashlib
+import json
+import os
+from pathlib import Path
+import signal
+import time
+import xml.etree.ElementTree as ET
+
+from check_backups import read_gpt, file_hash
+from firehose_read import Reader
+from fujisan_image import BootImage, report
+
+SECTOR = 512
+BOOT_START = 1050624
+BOOT_SECTORS = 131072
+
+
+def digest(data):
+    return hashlib.sha256(data).hexdigest()
+
+
+def load_plan(path):
+    plan = json.loads(path.read_text())
+    if plan['partition'] != 'boot':
+        raise ValueError('Only the documented boot partition is allowed')
+    image_path = Path(plan['image'])
+    image = image_path.read_bytes()
+    if digest(image) != plan['image_sha256']:
+        raise ValueError('Candidate hash does not match the selected plan')
+    info = report(image)
+    if not info['boot_id_valid'] or info['signature_target'] != '/boot':
+        raise ValueError('Expected a valid image signed for /boot')
+    b = BootImage(image)
+    if len(image) != b.payload_length + info['signature_bytes']:
+        raise ValueError('Candidate must end at its signed image, without trailing data')
+    backup_dir = Path(plan['backups'])
+    manifest = json.loads((backup_dir / 'backup-manifest.json').read_text())
+    for name in ('gpt_main0.bin', 'gpt_backup0.bin', 'boot.bin', 'recovery.bin', 'misc.bin'):
+        item = manifest['files'][name]
+        backup = backup_dir / name
+        if backup.stat().st_size != item['bytes'] or file_hash(backup) != item['sha256']:
+            raise ValueError('Missing or changed backup: ' + name)
+    primary = (backup_dir / 'gpt_main0.bin').read_bytes()
+    if len(primary) % SECTOR or digest(primary) != plan['gpt_sha256']:
+        raise ValueError('GPT backup differs from the selected phone')
+    gpt = read_gpt(primary)
+    boot = gpt['partitions']['boot']
+    if (boot['start_sector'], boot['sectors']) != (BOOT_START, BOOT_SECTORS):
+        raise ValueError('Unexpected boot partition bounds')
+    if not 0 < len(image) <= boot['bytes']:
+        raise ValueError('Candidate exceeds boot partition')
+    padded = image + b'\0' * (-len(image) % SECTOR)
+    return plan, image, padded, primary, gpt
+
+
+class BootWriter(Reader):
+    def set_write_mode(self, enabled):
+        self.send('configure', {'MemoryName': 'eMMC', 'Verbose': 0,
+                               'AlwaysValidate': 0, 'MaxDigestTableSizeInBytes': 2048,
+                               'MaxPayloadSizeToTargetInBytes': 65536,
+                               'ZLPAwareHost': 1, 'SkipStorageInit': 0,
+                               'SkipWrite': int(not enabled)})
+        attrs = self.response()
+        if attrs.get('MemoryName', 'eMMC').lower() != 'emmc':
+            raise ValueError('Programmer selected different storage')
+        limit = int(attrs.get('MaxPayloadSizeToTargetInBytes', 65536))
+        self.chunk_size = min(65536, limit)
+        if self.chunk_size < SECTOR or self.chunk_size % SECTOR:
+            raise ValueError('Invalid negotiated payload length')
+        self.writes_enabled = enabled
+
+    def program_boot(self, padded):
+        if not getattr(self, 'writes_enabled', False):
+            raise ValueError('Writes have not been explicitly enabled')
+        if not padded or len(padded) % SECTOR or len(padded) > BOOT_SECTORS * SECTOR:
+            raise ValueError('Boot write length is outside the allowed partition')
+        root = ET.Element('data')
+        ET.SubElement(root, 'program', {
+            'SECTOR_SIZE_IN_BYTES': str(SECTOR),
+            'physical_partition_number': '0',
+            'start_sector': str(BOOT_START),
+            'num_partition_sectors': str(len(padded) // SECTOR)})
+        encoded = b'<?xml version="1.0" ?>' + ET.tostring(root, encoding='utf-8')
+        self.log.write(b'TX ' + encoded + b'\n'); self.log.flush()
+        if self.ep_out.write(encoded, timeout=3000) != len(encoded):
+            raise RuntimeError('Short program XML transfer; do not retry automatically')
+        self.response(rawmode=True)
+        next_progress = 8 * 1024 * 1024
+        for offset in range(0, len(padded), self.chunk_size):
+            block = padded[offset:offset + self.chunk_size]
+            if self.ep_out.write(block, timeout=10000) != len(block):
+                raise RuntimeError('Short raw write; do not reset or retry automatically')
+            # Match upstream bkerler's ZLPAwareHost=1 transfer framing.
+            if self.ep_out.write(b'', timeout=3000) != 0:
+                raise RuntimeError('Unexpected zero-length transfer result')
+            if offset + len(block) >= next_progress:
+                print(json.dumps({'boot_write_bytes': offset + len(block),
+                                  'total_bytes': len(padded)}), flush=True)
+                next_progress += 8 * 1024 * 1024
+        self.response(rawmode=False, timeout=30)
+
+
+def save_state(path, state):
+    temporary = path.with_suffix('.json.tmp')
+    with temporary.open('w') as stream:
+        json.dump(state, stream, indent=2); stream.write('\n')
+        stream.flush(); os.fsync(stream.fileno())
+    os.replace(temporary, path)
+
+
+def execute(plan, image, padded, primary, gpt):
+    output = Path(plan['output'])
+    output.mkdir(mode=0o700, parents=True, exist_ok=False)
+    state_path = output / 'transaction.json'
+    state = {'partition': 'boot', 'start_sector': BOOT_START,
+             'sectors': len(padded) // SECTOR, 'image_bytes': len(image),
+             'image_sha256': digest(image), 'padded_sha256': digest(padded),
+             'write_started': False, 'program_ack': False,
+             'readback_verified': False, 'reset_sent': False}
+    save_state(state_path, state)
+    with (output / 'firehose.xml.log').open('xb') as log:
+        client = BootWriter(log)
+        try:
+            client.configure()  # SkipWrite=1 for all preflight reads.
+            live_gpt = output / 'gpt-before.bin'
+            client.read(0, len(primary) // SECTOR, live_gpt)
+            current = live_gpt.read_bytes()
+            read_gpt(current)
+            if current != primary:
+                raise ValueError('Current GPT differs from the backed-up phone; no write sent')
+            misc = gpt['partitions']['misc']
+            live_misc = output / 'misc-before.bin'
+            client.read(misc['start_sector'], misc['sectors'], live_misc)
+            if live_misc.read_bytes() != (Path(plan['backups']) / 'misc.bin').read_bytes():
+                raise ValueError('Misc changed since backup; inspect before any write')
+            if any(live_misc.read_bytes()[:32]):
+                raise ValueError('A bootloader command is set in misc; inspect before writing')
+            state['preflight_verified'] = True; save_state(state_path, state)
+            client.set_write_mode(True)
+            state['write_started'] = True; save_state(state_path, state)
+            client.program_boot(padded)
+            state['program_ack'] = True; save_state(state_path, state)
+            client.set_write_mode(False)
+            readback = output / 'boot-readback.bin'
+            result = client.read(BOOT_START, len(padded) // SECTOR, readback)
+            data = readback.read_bytes()
+            if result['sha256'] != digest(padded) or digest(data[:len(image)]) != digest(image):
+                raise ValueError('BOOT READBACK HASH MISMATCH. Keep EDL connected; no reset sent.')
+            state['readback_verified'] = True
+            state['readback_sha256'] = digest(data[:len(image)])
+            save_state(state_path, state)
+            print(json.dumps(state), flush=True)
+        except BaseException as exc:
+            state['error'] = type(exc).__name__ + ': ' + str(exc)
+            save_state(state_path, state)
+            raise
+        finally:
+            client.close()
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('plan', type=Path)
+    parser.add_argument('--execute', action='store_true')
+    args = parser.parse_args()
+    os.umask(0o077)
+    plan, image, padded, primary, gpt = load_plan(args.plan)
+    print(json.dumps({'local_preflight_passed': True, 'partition': 'boot',
+                      'image_sha256': digest(image), 'image_bytes': len(image),
+                      'write_sectors': len(padded) // SECTOR,
+                      'execute': args.execute}), flush=True)
+    if args.execute:
+        def deadline(signum, frame):
+            raise TimeoutError('Transaction deadline reached; do not reset automatically')
+        signal.signal(signal.SIGALRM, deadline); signal.alarm(180)
+        execute(plan, image, padded, primary, gpt)
+        signal.alarm(0)
+
+
+if __name__ == '__main__':
+    main()

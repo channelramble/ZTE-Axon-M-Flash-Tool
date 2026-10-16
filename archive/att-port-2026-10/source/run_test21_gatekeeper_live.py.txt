@@ -1,0 +1,129 @@
+#!/usr/bin/env python3
+"""Single reviewed RAM bind trial. No partition writes or phone/zygote restart."""
+from pathlib import Path
+import argparse, hashlib, importlib.util, json, os, shlex, subprocess, time
+
+ROOT = Path(__file__).resolve().parent
+ORIGINAL = 'a4ecd5222e7e935057a867f97b2a425c90fa5a1fd7576207d212ee0c20238c94'
+PATCHED = '6ad0a440825550c3f5ec504bf438cabcbbb987cf581f088cb939d52164deb5f6'
+SOURCE = ROOT / 'test21-gatekeeper-v1/gatekeeperd.diagnostic'
+BEFORE = ROOT / 'test21-gatekeeper-before-live'
+OUT = ROOT / 'test21-gatekeeper-live'
+RAM = '/dev/axon-test21-gatekeeper'
+TARGET = '/system/bin/gatekeeperd'
+SERVICE = 'android.service.gatekeeper.IGateKeeperService'
+sha = lambda b: hashlib.sha256(b).hexdigest()
+
+def save(state):
+    p = OUT / 'state.json.tmp'
+    with p.open('w') as f:
+        json.dump(state, f, indent=2); f.write('\n'); f.flush(); os.fsync(f.fileno())
+    p.replace(OUT / 'state.json')
+    fd = os.open(OUT, os.O_RDONLY)
+    try: os.fsync(fd)
+    finally: os.close(fd)
+
+def main():
+    os.umask(0o077)
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('phase', choices=['preflight', 'apply'], nargs='?', default='preflight')
+    args = parser.parse_args()
+    spec = importlib.util.spec_from_file_location('capture', ROOT / 'capture_test20_adb.py')
+    m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+    assert sha((ROOT / 'capture_test20_adb.py').read_bytes()) == 'e64ce5b709600dcd1c27e0d9338e83d5a4bc72098bf021dc1579b5e6032eb752'
+    backup = (BEFORE / 'gatekeeperd.original').read_bytes()
+    receipt = json.loads((BEFORE / 'local-verification.json').read_text())
+    assert receipt['complete'] and receipt['both_macs_verified']
+    assert len(backup) == 44800 and sha(backup) == ORIGINAL
+    patch = SOURCE.read_bytes()
+    assert len(patch) == 44800 and sha(patch) == PATCHED
+    assert backup[0x4678:0x467c].hex() == 'e80600b5' and patch[0x4678:0x467c].hex() == '37000014'
+    assert patch[:0x4678] == backup[:0x4678] and patch[0x467c:] == backup[0x467c:]
+    rows = [r.split() for r in subprocess.check_output([str(m.ADB), '-P', m.PORT, 'devices'], timeout=10).decode().splitlines()[1:] if len(r.split()) >= 2]
+    assert len(rows) == 1 and rows[0][1] == 'device'
+    capture = m.Capture(rows[0][0], time.monotonic() + 150)
+    base = [str(m.ADB), '-P', m.PORT, '-s', rows[0][0]]
+    body, meta = capture.remote(m.identity_command(), 4096, 10)
+    assert m.verify_identity(body, meta)
+    def cmd(command, seconds=10):
+        body, meta = capture.remote('set -eu; ' + command, 100000, seconds)
+        assert meta['status'] == 'ok', meta
+        return body.decode().strip()
+    def digest(path):
+        return cmd('sha256sum ' + shlex.quote(path)).split()[0]
+    def metadata(path):
+        assert cmd('stat -c %u:%g:%a:%s ' + shlex.quote(path)) == '0:2000:755:44800'
+        assert 'u:object_r:gatekeeperd_exec:s0' in cmd('ls -lZ ' + shlex.quote(path))
+    assert digest(TARGET) == ORIGINAL
+    metadata(TARGET)
+    assert cmd('getenforce') == 'Permissive'
+    assert cmd('getprop sys.boot_completed') == ''
+    pid = cmd('pidof gatekeeperd'); assert pid.isdigit()
+    ns = cmd('readlink /proc/1/ns/mnt /proc/self/ns/mnt /proc/' + pid + '/ns/mnt').splitlines()
+    assert len(ns) == 3 and len(set(ns)) == 1
+    assert digest('/proc/' + pid + '/root' + TARGET) == ORIGINAL
+    assert 'not found' in cmd('service check ' + SERVICE)
+    assert cmd('if [ -e ' + RAM + ' ] || [ -L ' + RAM + ' ]; then exit 90; fi; echo ABSENT') == 'ABSENT'
+    mount_before = cmd('cat /proc/self/mountinfo')
+    assert not any(l.split()[4] == TARGET for l in mount_before.splitlines())
+    dev = [l.split() for l in mount_before.splitlines() if l.split()[4] == '/dev']
+    assert len(dev) == 1 and 'rw' in dev[0][5].split(',') and 'noexec' not in dev[0][5].split(',')
+    assert dev[0][dev[0].index('-') + 1] == 'tmpfs'
+    vendor_state = cmd('getprop init.svc.vendor.gatekeeper-1-0')
+    assert vendor_state in ('running', 'restarting')
+    if args.phase == 'preflight':
+        print(json.dumps({'preflight_passed': True, 'phone_writes': False, 'shared_mount_namespace': True})); return
+    review = json.loads((ROOT / 'test21-gatekeeper-live-review.json').read_text())
+    assert review['passed'] and review['runner_sha256'] == sha(Path(__file__).read_bytes()) and review['patched_sha256'] == PATCHED
+    assert not OUT.exists() and not OUT.is_symlink()
+    OUT.mkdir(mode=0o700)
+    state = {'phase': 'started', 'original_sha256': ORIGINAL, 'patched_sha256': PATCHED, 'phone_reset': False,
+             'partition_writes': False, 'prior_vendor_state': vendor_state, 'mount_namespace': ns[0]}
+    save(state)
+    (OUT / 'mount-before.txt').write_text(mount_before + '\n')
+    cmd('mkdir -m 755 ' + RAM)
+    subprocess.run(base + ['push', str(SOURCE), RAM + '/gatekeeperd'], capture_output=True, check=True, timeout=15)
+    cmd('chown 0:2000 ' + RAM + '/gatekeeperd; chmod 755 ' + RAM + '/gatekeeperd; chcon u:object_r:gatekeeperd_exec:s0 ' + RAM + '/gatekeeperd')
+    assert digest(RAM + '/gatekeeperd') == PATCHED; metadata(RAM + '/gatekeeperd')
+    state['phase'] = 'staged_verified'; save(state)
+    def wait_stopped(service, process=None):
+        for _ in range(8):
+            value = cmd('getprop init.svc.' + service)
+            remaining = cmd('pidof ' + process + ' || true') if process else ''
+            if value == 'stopped' and not remaining: return
+            time.sleep(0.5)
+        raise AssertionError('service did not stop; no retry')
+    cmd('setprop ctl.stop gatekeeperd'); wait_stopped('gatekeeperd', 'gatekeeperd')
+    cmd('setprop ctl.stop vendor.gatekeeper-1-0'); wait_stopped('vendor.gatekeeper-1-0')
+    state['phase'] = 'services_stopped'; save(state)
+    # Same namespace was proved above; bind is the only mount mutation.
+    assert cmd('readlink /proc/1/ns/mnt /proc/self/ns/mnt').splitlines() == [ns[0], ns[0]]
+    cmd('mount -o bind ' + RAM + '/gatekeeperd ' + TARGET)
+    mount_after = cmd('cat /proc/self/mountinfo')
+    owned = [l for l in mount_after.splitlines() if l.split()[4] == TARGET]
+    assert len(owned) == 1
+    fields = owned[0].split()
+    assert fields[3] == '/axon-test21-gatekeeper/gatekeeperd' and fields[fields.index('-') + 1] == 'tmpfs'
+    assert fields[2] == dev[0][2]
+    state['owned_mount'] = owned[0]; state['phase'] = 'bound'; save(state)
+    (OUT / 'mount-after.txt').write_text(mount_after + '\n')
+    assert digest(TARGET) == PATCHED; metadata(TARGET)
+    assert digest('/proc/1/root' + TARGET) == PATCHED
+    state['phase'] = 'bind_readback_verified'; save(state)
+    cmd('setprop ctl.start gatekeeperd')
+    for _ in range(12):
+        new_pid = cmd('pidof gatekeeperd || true')
+        service_check = cmd('service check ' + SERVICE)
+        if new_pid.isdigit() and ': found' in service_check: break
+        time.sleep(0.5)
+    else: raise AssertionError('Gatekeeper binder did not appear; inspect before retry/rollback')
+    assert cmd('readlink /proc/' + new_pid + '/ns/mnt') == ns[0]
+    assert digest('/proc/' + new_pid + '/exe') == PATCHED
+    state.update({'phase': 'binder_registered', 'gatekeeper_pid': int(new_pid), 'patched_executable_verified': True,
+                  'system_boot_completed': cmd('getprop sys.boot_completed'), 'vendor_state_after': cmd('getprop init.svc.vendor.gatekeeper-1-0'),
+                  'runtime_only_reboot_restores_original': True})
+    save(state)
+    print(json.dumps({'live_trial_applied': True, 'binder_registered': True, 'partition_writes': False, 'reset_performed': False}), flush=True)
+
+if __name__ == '__main__':
+    main()

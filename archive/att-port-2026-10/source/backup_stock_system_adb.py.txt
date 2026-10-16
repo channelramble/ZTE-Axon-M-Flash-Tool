@@ -1,0 +1,55 @@
+#!/usr/bin/env python3
+"""Read-only full stock system backup over one selected adb transport.
+Writes private compressed backup only on the MacBook, not on the phone.
+"""
+from pathlib import Path
+import datetime,gzip,hashlib,json,os,shutil,subprocess,time
+ROOT=Path(__file__).resolve().parent
+ADB=Path.home()/'.local/share/axon-m-edl/platform-tools-29.0.6/adb'
+SIZE=6979321856
+os.umask(0o077)
+r=subprocess.run([str(ADB),'-P','5038','devices'],capture_output=True,text=True,timeout=10)
+rows=[l.split() for l in r.stdout.splitlines()[1:] if len(l.split())>=2]
+assert len(rows)==1 and rows[0][1] in ('device','recovery')
+base=[str(ADB),'-P','5038','-s',rows[0][0],'exec-out']
+def cmd(s,timeout=15):
+ return subprocess.check_output(base+['sh','-c',s],timeout=timeout).decode().strip()
+assert cmd('id -u')=='0'
+assert cmd('cat /sys/class/block/mmcblk0p20/start')=='1312768'
+assert cmd('cat /sys/class/block/mmcblk0p20/size')=='13631488'
+assert cmd('cat /sys/class/block/mmcblk0p20/dev')=='179:20'
+mounts=cmd('cat /proc/mounts')
+for line in mounts.splitlines():
+ fields=line.split()
+ if len(fields)>=4 and (fields[1] in ('/system','/system_root') or 'mmcblk0p20' in fields[0]):assert 'rw' not in fields[3].split(','),'System must not be mounted writable'
+assert shutil.disk_usage(ROOT).free>SIZE+2*1024**3
+out=ROOT/'stock-system-adb-backup';out.mkdir(mode=0o700,exist_ok=False)
+state={'complete':False,'read_only':True,'device_writes':False,'resets':False,'partition':'system','start_sector':1312768,'sectors':13631488,'bytes_expected':SIZE,'started_at':datetime.datetime.now(datetime.timezone.utc).isoformat()}
+def save():
+ temp=out/'backup.json.tmp';temp.write_text(json.dumps(state,indent=2)+'\n');temp.replace(out/'backup.json')
+save();h=hashlib.sha256();count=0;start=time.monotonic();next_progress=256*1024**2
+with (out/'adb.stderr').open('xb') as err,(out/'system.bin.gz').open('xb') as dest:
+ p=subprocess.Popen(base+['cat','/dev/block/mmcblk0p20'],stdout=subprocess.PIPE,stderr=err)
+ try:
+  with gzip.GzipFile(fileobj=dest,mode='wb',compresslevel=1,mtime=0) as z:
+   while True:
+    b=p.stdout.read(1048576)
+    if not b:break
+    count+=len(b);assert count<=SIZE and time.monotonic()-start<1800
+    h.update(b);z.write(b)
+    if count>=next_progress:
+     state.update(read_bytes=count);save();print(json.dumps({'read_bytes':count,'total_bytes':SIZE}),flush=True);next_progress+=256*1024**2
+  assert p.wait(timeout=15)==0 and count==SIZE
+  dest.flush();os.fsync(dest.fileno())
+ finally:
+  if p.poll() is None:p.kill();p.wait()
+state.update(raw_sha256=h.hexdigest(),bytes=count,compressed_bytes=(out/'system.bin.gz').stat().st_size);save()
+# Verify the saved compressed copy and a fresh hash of the source partition.
+h2=hashlib.sha256();n=0
+with gzip.open(out/'system.bin.gz','rb') as z:
+ for b in iter(lambda:z.read(1048576),b''):h2.update(b);n+=len(b)
+assert n==SIZE and h2.hexdigest()==state['raw_sha256']
+source_hash=cmd('sha256sum /dev/block/mmcblk0p20',timeout=240).split()[0]
+assert source_hash==state['raw_sha256']
+state.update(complete=True,compressed_copy_verified=True,independent_source_hash_verified=True,finished_at=datetime.datetime.now(datetime.timezone.utc).isoformat());save()
+print(json.dumps(state),flush=True)

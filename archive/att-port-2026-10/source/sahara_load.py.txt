@@ -1,0 +1,118 @@
+#!/usr/bin/env python3
+"""Bounded RAM-only Sahara upload of the verified Fujisan eMMC programmer."""
+import argparse
+import hashlib
+import struct
+import time
+from pathlib import Path
+import usb.core
+import usb.util
+
+EXPECTED = 'cb2267737c2bd32e2e07c9d6bbf304fce5d827685b9f85db5b9aece75a7d7a94'
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('programmer', type=Path)
+    parser.add_argument('--wait-seconds', type=int, default=0,
+                        help='Wait for a newly connected 05c6:9008 device')
+    args = parser.parse_args()
+    if not 0 <= args.wait_seconds <= 180:
+        raise ValueError('USB arrival wait must be between 0 and 180 seconds')
+    payload = args.programmer.read_bytes()
+    if hashlib.sha256(payload).hexdigest() != EXPECTED:
+        raise ValueError('Programmer hash differs from the verified eMMC source')
+    devices = list(usb.core.find(find_all=True, idVendor=0x05c6, idProduct=0x9008))
+    if not devices and args.wait_seconds:
+        print('Waiting for fresh EDL USB arrival', flush=True)
+        arrival_deadline = time.monotonic() + args.wait_seconds
+        while not devices and time.monotonic() < arrival_deadline:
+            time.sleep(0.2)
+            devices = list(usb.core.find(find_all=True, idVendor=0x05c6, idProduct=0x9008))
+    if len(devices) != 1:
+        raise ValueError('Expected exactly one Qualcomm EDL device')
+    device = devices[0]
+    config = device.get_active_configuration()
+    interface = next(i for i in config if i.bInterfaceClass == 0xff)
+    ep_in = next(e for e in interface if usb.util.endpoint_direction(e.bEndpointAddress) == usb.util.ENDPOINT_IN)
+    ep_out = next(e for e in interface if usb.util.endpoint_direction(e.bEndpointAddress) == usb.util.ENDPOINT_OUT)
+    usb.util.claim_interface(device, interface.bInterfaceNumber)
+    deadline = time.monotonic() + 25
+    pending = bytearray()
+
+    def receive(optional=False):
+        while len(pending) < 8 or len(pending) < struct.unpack_from('<I', pending, 4)[0]:
+            if time.monotonic() > deadline:
+                raise TimeoutError('Sahara transaction deadline exceeded')
+            try:
+                packet = bytes(ep_in.read(16384, timeout=1000))
+            except usb.core.USBTimeoutError:
+                if optional and not pending:
+                    return None
+                raise TimeoutError('No Sahara response within 1 second')
+            if not packet:
+                raise ValueError('Empty USB packet during Sahara exchange')
+            if not pending and b'<?xml' in packet:
+                raise ValueError('XML received: device already appears to be in Firehose mode')
+            pending.extend(packet)
+            if len(pending) >= 8:
+                n = struct.unpack_from('<I', pending, 4)[0]
+                if n < 8 or n > 256:
+                    raise ValueError('Invalid Sahara packet length')
+        cmd, size = struct.unpack_from('<II', pending)
+        data = bytes(pending[:size]); del pending[:size]
+        return cmd, data
+
+    def send(data):
+        for offset in range(0, len(data), 16384):
+            chunk = data[offset:offset+16384]
+            n = ep_out.write(chunk, timeout=1500)
+            if n != len(chunk):
+                raise ValueError('Short USB write during RAM upload')
+
+    try:
+        print('USB interface claimed; no storage commands will be sent', flush=True)
+        first = receive(optional=True)
+        if first is None:
+            print('No HELLO pending; sending documented mode-0 HELLO response', flush=True)
+        else:
+            cmd, data = first
+            if cmd != 1 or len(data) != 48:
+                raise ValueError('Expected HELLO; received command '+hex(cmd))
+            version, minimum, maximum, mode = struct.unpack_from('<IIII', data, 8)
+            print('HELLO', {'version':version,'minimum':minimum,'mode':mode}, flush=True)
+            if minimum > 2 or mode not in (0, 1):
+                raise ValueError('Unsupported Sahara version or mode')
+        send(struct.pack('<12I', 2, 48, 2, 1, 0, 0, 0, 0, 0, 0, 0, 0))
+        requests = transferred = 0
+        while requests < 4096:
+            cmd, data = receive()
+            if cmd in (3, 0x12):
+                if cmd == 3 and len(data) == 20:
+                    image_id, offset, length = struct.unpack_from('<III', data, 8)
+                elif cmd == 0x12 and len(data) == 32:
+                    image_id, offset, length = struct.unpack_from('<QQQ', data, 8)
+                else:
+                    raise ValueError('Malformed Sahara data request')
+                if not length or length > 1024*1024 or offset + length > len(payload):
+                    raise ValueError('Loader request extends outside verified file')
+                send(payload[offset:offset+length]); requests += 1; transferred += length
+                if requests <= 3:
+                    print('served loader range', {'offset':offset,'bytes':length}, flush=True)
+            elif cmd == 4 and len(data) == 16:
+                image_id, status = struct.unpack_from('<II', data, 8)
+                if status:
+                    raise ValueError('Sahara rejected programmer with status '+hex(status))
+                send(struct.pack('<II', 5, 8))
+                done, response = receive()
+                if done != 6 or len(response) != 12 or struct.unpack_from('<I',response,8)[0] != 1:
+                    raise ValueError('Unexpected Sahara DONE response')
+                print('Programmer accepted in RAM', {'requests':requests,'transferred_bytes':transferred}, flush=True)
+                return
+            else:
+                raise ValueError('Unexpected Sahara command '+hex(cmd))
+        raise ValueError('Too many Sahara loader requests')
+    finally:
+        usb.util.dispose_resources(device)
+
+if __name__ == '__main__':
+    main()

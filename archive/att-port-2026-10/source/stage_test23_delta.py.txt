@@ -1,0 +1,55 @@
+#!/usr/bin/env python3
+"""MacBook files only: clone verified Test22 package, apply pinned block delta."""
+from pathlib import Path
+import base64, hashlib, json, os, subprocess
+
+ROOT = Path(__file__).resolve().parent
+SOURCE = ROOT / 'test22-package-v1/system.img'
+OUT = ROOT / 'test23-package-v1'
+SOURCE_SHA = '508cd08359c6602c36d1bf0a2711dc064bfae509b5773b55933d68ad1f2570a8'
+OUTPUT_SHA = '33db1d4d4e5e49f5dc1c06cbd6a0e39b07fd9b6d886941e33f165b7876fccc5a'
+SIZE = 6979321856
+sha = lambda b: hashlib.sha256(b).hexdigest()
+
+def digest(path):
+    h = hashlib.sha256()
+    with path.open('rb') as f:
+        for chunk in iter(lambda: f.read(4194304), b''): h.update(chunk)
+    return h.hexdigest()
+
+def main():
+    os.umask(0o077)
+    assert SOURCE.is_file() and not SOURCE.is_symlink() and SOURCE.stat().st_size == SIZE
+    assert digest(SOURCE) == SOURCE_SHA
+    data = json.loads((ROOT / 'test23-system-delta.json').read_text())
+    assert data['source_sha256'] == SOURCE_SHA and data['image_sha256'] == OUTPUT_SHA and data['bytes'] == SIZE
+    patches = []; offsets = []
+    with SOURCE.open('rb') as f:
+        for row in data['blocks']:
+            offset = row['offset']; assert type(offset) is int and offset % 4096 == 0 and 0 <= offset <= SIZE - 4096
+            block = base64.b64decode(row['data_base64'], validate=True)
+            assert len(block) == 4096 and sha(block) == row['sha256']
+            f.seek(offset); assert sha(f.read(4096)) == row['original_sha256']
+            offsets.append(offset); patches.append((offset, row['original_sha256'], block))
+    assert offsets == sorted(set(offsets)) and 0 < len(offsets) < 64
+    assert not OUT.exists() and not OUT.is_symlink()
+    OUT.mkdir(mode=0o700)
+    image = OUT / 'system.img'
+    subprocess.run(['/bin/cp', '-c', str(SOURCE), str(image)], check=True)
+    with image.open('r+b') as f:
+        for offset, original_sha, block in patches:
+            f.seek(offset); assert sha(f.read(4096)) == original_sha
+            f.seek(offset); f.write(block)
+        f.flush(); os.fsync(f.fileno())
+        for offset, _, block in patches:
+            f.seek(offset); assert f.read(4096) == block
+    assert image.stat().st_size == SIZE and digest(image) == OUTPUT_SHA
+    assert digest(SOURCE) == SOURCE_SHA
+    receipt = {'complete': True, 'source_sha256': SOURCE_SHA, 'image_sha256': OUTPUT_SHA, 'bytes': SIZE,
+               'saved_copy_readback_verified': True, 'source_unchanged': True,
+               'changed_blocks': len(patches), 'phone_operations': False}
+    with (OUT / 'staging-verification.json').open('x') as f:
+        f.write(json.dumps(receipt, indent=2) + '\n'); f.flush(); os.fsync(f.fileno())
+    print(json.dumps(receipt), flush=True)
+
+if __name__ == '__main__': main()

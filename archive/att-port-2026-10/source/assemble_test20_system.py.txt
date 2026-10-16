@@ -1,0 +1,125 @@
+#!/usr/bin/env python3
+"""Assemble a private APFS clone; existing payloads are same-size data patches.
+
+Only three explicitly described logger files are added with debugfs. Preserve
+all existing file inode/xattr metadata. Never accesses a phone or block device.
+"""
+from pathlib import Path
+import hashlib,json,os,re,subprocess
+ROOT=Path(__file__).resolve().parent
+DEBUGFS='/opt/homebrew/opt/e2fsprogs/sbin/debugfs'
+FSCK='/opt/homebrew/opt/e2fsprogs/sbin/e2fsck'
+SOURCE_SHA='0271379d1402dc727b1c5f4a48333cf3db1f799d86370c19b5cafdecb4846f27'
+PINS={
+ 'prepared/los23-full-security-v1/manifest.json':'8db8de41dee7a2acd784c1369631cc04718f71ebe8a2f0ee95bdfd48059ef865',
+ 'los23-full-usb-payloads/manifest.json':'de9375170d86d5746723f18bda2b5100df1a25eb2023ffb95d5cff7da720c5c9',
+ 'test20-logging-payloads/manifest.json':'4dc97b7c3be3f9cbc6f663be26ea0cc8249728fa270ad8acb514781042e34fa1'}
+sha=lambda b:hashlib.sha256(b).hexdigest()
+def file_sha(p):
+ h=hashlib.sha256()
+ with p.open('rb') as f:
+  for b in iter(lambda:f.read(4*1024*1024),b''):h.update(b)
+ return h.hexdigest()
+def dbg(image,command,allow_missing=False):
+ r=subprocess.run([DEBUGFS,'-R',command,str(image)],capture_output=True,check=True)
+ errors=r.stderr.decode()
+ if not allow_missing:assert not any(x in errors.lower() for x in ('not found','error','invalid','not a directory')),errors
+ return r.stdout
+def path_ok(p):
+ assert p.startswith(('/system/','/vendor/','/system_ext/')) and re.fullmatch(r'/[A-Za-z0-9_./@+-]+',p)
+ assert '..' not in p.split('/')
+def main():
+ os.umask(0o077)
+ source=ROOT/'los23-system-att-gpu/system.img'
+ assert source.is_file() and not source.is_symlink() and source.stat().st_size==6979321856
+ assert file_sha(source)==SOURCE_SHA
+ manifests={}
+ for name,digest in PINS.items():
+  b=(ROOT/name).read_bytes();assert sha(b)==digest;manifests[name]=json.loads(b)
+ rows=[]
+ for e in manifests['prepared/los23-full-security-v1/manifest.json']['entries']:
+  rows.append(dict(path=e['filesystem_path'],source_sha=e['original_sha256'],payload=Path(e['output_path']),output_sha=e['output_sha256']))
+ for e in manifests['los23-full-usb-payloads/manifest.json']['files']:
+  rows.append(dict(path=e['filesystem_path'],source_sha=e['original_sha256'],payload=ROOT/'los23-full-usb-payloads'/e['payload_file'],output_sha=e['output_sha256']))
+ fstab_path='/vendor/etc/fstab.qcom'
+ old=dbg(source,'cat '+fstab_path)
+ assert old==(ROOT/'los23-boot-startup-analysis/vendor__etc__fstab.qcom').read_bytes()
+ assert old.count(b'formattable')==4
+ new=old.replace(b',formattable',b'')
+ assert b'formattable' not in new
+ new+=b'\n'*(len(old)-len(new))
+ rows.append(dict(path=fstab_path,source_sha=sha(old),data=new,output_sha=sha(new)))
+ assert len({r['path'] for r in rows})==len(rows)==16
+ additions=manifests['test20-logging-payloads/manifest.json']['files']
+ assert len(additions)==3
+ patches=[];covered=set();metadata={};contents={}
+ for r in rows:
+  name=r['path'];path_ok(name)
+  data=r.pop('data',None)
+  if data is None:data=r.pop('payload').read_bytes()
+  assert sha(data)==r['output_sha']
+  original=dbg(source,'cat '+name);assert sha(original)==r['source_sha'] and len(original)==len(data)
+  stat=dbg(source,'stat '+name)
+  assert b'Type: regular' in stat and b'Links: 1 ' in stat and b'Flags: 0x80000' in stat
+  assert int(re.search(rb'\bSize: (\d+)',stat).group(1))==len(data)
+  metadata[name]=stat;contents[name]=data
+  blocks=[]
+  for logical in range((len(data)+4095)//4096):
+   oldchunk=original[logical*4096:(logical+1)*4096];newchunk=data[logical*4096:(logical+1)*4096]
+   if oldchunk==newchunk:continue
+   value=dbg(source,f'bmap {name} {logical}').strip();assert value.isdigit()
+   physical=int(value);assert physical>0 and physical not in covered;covered.add(physical)
+   off=physical*4096
+   with source.open('rb') as f:f.seek(off);assert f.read(len(oldchunk))==oldchunk
+   patches.append((off,oldchunk,newchunk));blocks.append(physical)
+  r.update(bytes=len(data),changed_bytes=sum(a!=b for a,b in zip(original,data)),changed_data_blocks=blocks,
+           original_stat_sha256=sha(stat))
+ for r in additions:
+  path_ok(r['path']);assert r['path'] not in contents
+  assert not dbg(source,'stat '+r['path'],allow_missing=True).strip()
+  data=Path(r['payload']).read_bytes();assert sha(data)==r['sha256'] and len(data)==r['bytes']
+  assert r['uid']==r['gid']==0 and r['mode']==0o100644 and r['selinux']=='u:object_r:system_file:s0'
+ out=ROOT/'test20-system-v1';assert not out.exists();out.mkdir(mode=0o700)
+ image=out/'system.img';subprocess.run(['/bin/cp','-c',str(source),str(image)],check=True)
+ with image.open('r+b') as f:
+  for off,old,new in patches:
+   f.seek(off);assert f.read(len(old))==old;f.seek(off);f.write(new)
+  f.flush();os.fsync(f.fileno())
+ # Before adding new inodes, every other byte must remain identical.
+ cursor=0
+ with source.open('rb') as a,image.open('rb') as b:
+  for off,old,new in sorted(patches)+[(source.stat().st_size,b'',b'')]:
+   left=off-cursor;assert left>=0
+   while left:
+    count=min(left,4*1024*1024);assert a.read(count)==b.read(count);left-=count
+   assert a.read(len(old))==old and b.read(len(new))==new;cursor=off+len(old)
+ for name,stat in metadata.items():assert dbg(image,'stat '+name)==stat
+ label=out/'system_file.selinux';label.write_bytes(b'u:object_r:system_file:s0\0')
+ commands=['set_current_time 1230768000']
+ for r in additions:
+  name=r['path'];payload=Path(r['payload']);assert ' ' not in str(payload)
+  commands += [f'write {payload} {name}',f'set_inode_field {name} mode 0100644',
+               f'set_inode_field {name} uid 0',f'set_inode_field {name} gid 0',
+               f'ea_set -f {label} {name} security.selinux']
+ script=out/'debugfs-additions.txt';script.write_text('\n'.join(commands)+'\n')
+ r=subprocess.run([DEBUGFS,'-w','-f',str(script),str(image)],capture_output=True,check=True)
+ (out/'debugfs-additions.log').write_bytes(r.stdout+r.stderr)
+ assert not any(x in (r.stdout+r.stderr).lower() for x in (b'not found',b'error',b'invalid',b'command not found'))
+ for name,data in contents.items():
+  assert dbg(image,'cat '+name)==data and dbg(image,'stat '+name)==metadata[name]
+ for r in additions:
+  name=r['path'];assert sha(dbg(image,'cat '+name))==r['sha256']
+  stat=dbg(image,'stat '+name)
+  assert b'Type: regular' in stat and b'Mode:  0644' in stat and re.search(rb'User:\s+0\s+Group:\s+0\s',stat)
+  assert b'security.selinux (26) = "u:object_r:system_file:s0\\000"' in stat
+ check=subprocess.run([FSCK,'-fn',str(image)],capture_output=True)
+ (out/'e2fsck-read-only.txt').write_bytes(check.stdout+check.stderr);assert check.returncode==0
+ assert file_sha(source)==SOURCE_SHA
+ manifest={'passed':True,'source_sha256':SOURCE_SHA,'image_sha256':file_sha(image),
+           'bytes':image.stat().st_size,'payload_manifest_pins':PINS,'existing_files':rows,'added_files':additions,
+           'existing_inode_metadata_xattrs_preserved':True,'pre_addition_other_image_bytes_exact':True,
+           'additions_verified_mode_owner_selinux':True,'read_only_fsck_passed':True,
+           'automatic_format_flags_removed':True,'phone_operations':False,'hardware_tested':False}
+ (out/'manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')
+ print(json.dumps({k:manifest[k] for k in ('passed','image_sha256','bytes','hardware_tested')}),flush=True)
+if __name__=='__main__':main()

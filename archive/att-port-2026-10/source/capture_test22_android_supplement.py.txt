@@ -1,0 +1,179 @@
+#!/usr/bin/env python3
+"""Bounded, read-only Test22 crash/framework evidence and 60-second stability.
+
+No root request, service action, setting, mount, reset, signal or device write.
+Uses the reviewed Test22 Capture framing; every output directory is exclusive.
+"""
+from pathlib import Path
+import argparse
+import json
+import os
+import re
+import time
+
+from capture_test22_adb import (ADB, PORT, ROOT, Capture, bounded_process,
+    identity_command, verify_identity, property_command, save_state, sha,
+    write_text_capture)
+
+WHOLE_SECONDS = 180
+PATCHES = {
+    '/system/bin/gatekeeperd': '6ad0a440825550c3f5ec504bf438cabcbbb987cf581f088cb939d52164deb5f6',
+    '/system/lib64/libmeminfo.so': '040e0c8f97434b8d101914901f55b346c4b27eee8dc82b43f2a766258245a028',
+    '/vendor/etc/init/android.hardware.gatekeeper@1.0-service.rc':
+        '172a6f91ce32c0b8cb00e29802d0a50832e01c7813d1accc0c617296fd6ef057',
+}
+PROPS = ('sys.boot_completed', 'dev.bootcomplete', 'service.bootanim.exit',
+         'init.svc.bootanim', 'init.svc.zygote', 'init.svc.zygote_secondary',
+         'init.svc.surfaceflinger', 'init.svc.gatekeeperd',
+         'init.svc.vendor.gatekeeper-1-0', 'init.svc.keystore2',
+         'sys.usb.config', 'sys.usb.state', 'init.svc.adbd',
+         'init.svc.axon-diag-test22', 'init.svc.axon-save-test22')
+CRASH = '/system/bin/logcat -b crash -d -t 400'
+FRAMEWORK = (
+    '/system/bin/logcat -b main -b system -d -t 1600 '
+    'SystemServer:I SystemServiceManager:I ActivityManager:I ActivityTaskManager:I '
+    'WindowManager:I BootAnimation:I AndroidRuntime:E libc:F DEBUG:F '
+    'Watchdog:I AppProfiler:I \'*:S\'')
+
+
+def patch_command():
+    return '/system/bin/sha256sum ' + ' '.join(PATCHES)
+
+
+def verify_patches(body, metadata):
+    if metadata.get('status') != 'ok':
+        return False
+    try:
+        rows = [line.split() for line in body.decode('ascii').splitlines()]
+    except UnicodeError:
+        return False
+    if len(rows) != len(PATCHES) or any(len(row) != 2 for row in rows):
+        return False
+    found = {row[1]: row[0] for row in rows}
+    return len(found) == len(rows) and found == PATCHES
+
+
+def observation_command():
+    return (
+        "printf 'uptime='; /system/bin/cat /proc/uptime; "
+        "p=$(/system/bin/pidof system_server 2>/dev/null || true); "
+        "printf 'system_server_pid=%s\\n' \"$p\"; "
+        "case \"$p\" in ''|*[!0-9]*) ;; *) "
+        "printf 'system_server_stat='; /system/bin/cat /proc/$p/stat 2>/dev/null || true; "
+        "printf '\\n' ;; esac; "
+        + property_command(PROPS) + '; '
+        '/system/bin/service check android.service.gatekeeper.IGateKeeperService'
+    )
+
+
+def parse_observation(body):
+    text = body.decode('utf-8', 'replace')
+    values = {}
+    for line in text.splitlines():
+        if '=' in line:
+            name, value = line.split('=', 1)
+            if name in PROPS or name in ('uptime', 'system_server_pid', 'system_server_stat'):
+                values[name] = value
+    pid = values.get('system_server_pid', '')
+    stat = values.get('system_server_stat', '')
+    match = re.fullmatch(r'(\d+) \(system_server\) (.+)', stat)
+    # Fields after comm begin with state (field3); starttime is field22.
+    starttime = None
+    if re.fullmatch(r'[1-9][0-9]*', pid) and match and match[1] == pid:
+        fields = match[2].split()
+        if len(fields) >= 20 and fields[19].isdigit():
+            starttime = fields[19]
+    return {'pid': int(pid) if re.fullmatch(r'[1-9][0-9]*', pid) else None,
+            'starttime_ticks': starttime,
+            'properties': {name: values.get(name) for name in PROPS},
+            'gatekeeper_binder_found': bool(re.search(
+                r'^Service android\.service\.gatekeeper\.IGateKeeperService: found\s*$',
+                text, re.MULTILINE))}
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--output-dir', type=Path,
+                        default=ROOT / 'test22-android-supplement-v1')
+    args = parser.parse_args()
+    os.umask(0o077)
+    out = args.output_dir
+    out.mkdir(mode=0o700, parents=True, exist_ok=False)
+    state = {'captured': False, 'finished': False, 'read_only': True,
+             'files': {}, 'observations': [], 'whole_timeout_seconds': WHOLE_SECONDS,
+             'no_device_writes_resets_root_requests_mounts_or_settings': True}
+    save_state(out, state)
+    deadline = time.monotonic() + WHOLE_SECONDS
+    raw, rc, status = bounded_process([str(ADB), '-P', PORT, 'devices'], 10, 65536)
+    rows = [line.split() for line in raw.decode('utf-8', 'replace').splitlines()
+            if '\t' in line and len(line.split()) >= 2]
+    state['adb_states'] = [row[1] for row in rows]
+    if status != 'ok' or rc != 0 or len(rows) != 1 or rows[0][1] != 'device':
+        state['refused'] = 'Require exactly one full Android adb device'
+        save_state(out, state)
+        return 2
+    capture = Capture(rows[0][0], deadline)
+    identity, info = capture.remote(identity_command(), 4096, 10)
+    if not verify_identity(identity, info):
+        state['refused'] = 'Exact Test22 full Android identity/root guard failed'
+        state['identity_status'] = info
+        save_state(out, state)
+        return 3
+    (out / 'identity.txt').write_bytes(identity)
+    state['files']['identity.txt'] = {'status': 'ok', 'bytes': len(identity), 'sha256': sha(identity)}
+    patches, info = capture.remote(patch_command(), 4096, 10)
+    (out / 'patch-hashes.txt').write_bytes(patches)
+    state['files']['patch-hashes.txt'] = dict(info, sha256=sha(patches), bytes=len(patches))
+    if not verify_patches(patches, info):
+        state['refused'] = 'Exact Test22 native patches/service payload guard failed'
+        save_state(out, state)
+        return 4
+    state.update(captured=True, full_android_identity_verified=True, patch_hashes_verified=True)
+    save_state(out, state)
+    began = time.monotonic()
+    try:
+        for index in range(3):
+            if index:
+                if time.monotonic() + 30 >= deadline - 10:
+                    raise TimeoutError('Insufficient observation budget')
+                time.sleep(30)
+            name = 'observation-%02d.txt' % index
+            body, info = capture.remote(observation_command(), 16384, 10)
+            (out / name).write_bytes(body)
+            state['files'][name] = dict(info, sha256=sha(body), bytes=len(body))
+            observation = parse_observation(body)
+            observation.update(elapsed_seconds=round(time.monotonic() - began, 3),
+                               status=info['status'])
+            state['observations'].append(observation)
+            save_state(out, state)
+            print(json.dumps({'observation': index, 'status': info['status'],
+                              'system_server_present': observation['pid'] is not None,
+                              'boot_completed': observation['properties']['sys.boot_completed']}), flush=True)
+            if index in (0, 2):
+                suffix = 'before' if index == 0 else 'after'
+                write_text_capture(capture, out, state, 'crash-' + suffix + '.txt', CRASH, 524288, 10)
+                write_text_capture(capture, out, state, 'framework-' + suffix + '.txt', FRAMEWORK, 786432, 10)
+        observations = state['observations']
+        signatures = {(o['pid'], o['starttime_ticks']) for o in observations}
+        state['system_server_same_pid_and_starttime_all_samples'] = (
+            len(signatures) == 1 and all(o['status'] == 'ok' and o['pid'] is not None
+                                        and o['starttime_ticks'] is not None for o in observations))
+        state['observation_span_seconds'] = round(observations[-1]['elapsed_seconds'] - observations[0]['elapsed_seconds'], 3)
+        state['gatekeeper_binder_found_all_samples'] = all(o['gatekeeper_binder_found'] for o in observations)
+        state['last_boot_completed'] = observations[-1]['properties']['sys.boot_completed']
+        state['finished'] = True
+        state['all_commands_ok'] = all(row['status'] == 'ok' for row in state['files'].values())
+        state['transaction_deadline_reached'] = time.monotonic() >= deadline
+        save_state(out, state)
+        print(json.dumps({'finished': True, 'all_commands_ok': state['all_commands_ok'],
+                          'system_server_stable_at_samples': state['system_server_same_pid_and_starttime_all_samples'],
+                          'boot_completed': state['last_boot_completed']}), flush=True)
+        return 0
+    except BaseException as exc:
+        state['error'] = type(exc).__name__ + ': ' + str(exc)
+        save_state(out, state)
+        raise
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())

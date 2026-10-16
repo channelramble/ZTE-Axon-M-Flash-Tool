@@ -1,0 +1,22 @@
+from pathlib import Path
+import time,json,os
+from capture_test22_adb import ADB,PORT,ROOT,Capture,bounded_process,identity_command,verify_identity,write_text_capture,save_state
+os.umask(0o077)
+out=ROOT/'test23-display-modes-v1';out.mkdir(exist_ok=False)
+state={'files':{},'read_only':True,'complete':False};save_state(out,state)
+raw,rc,status=bounded_process([str(ADB),'-P',PORT,'devices'],10,65536)
+rows=[x.split() for x in raw.decode().splitlines()[1:] if len(x.split())>=2]
+assert len(rows)==1 and rows[0][1]=='device'
+c=Capture(rows[0][0],time.monotonic()+150)
+b,info=c.remote(identity_command(),4096,10);assert verify_identity(b,info)
+commands=[
+('system-packages.txt','pm list packages -s | grep -Ei "display|screen|zte|lineage|settings|fujisan"',16384,10),
+('display-state.txt','dumpsys display',262144,15),
+('display-services.txt','service list | grep -Ei "display|screen|hall|device_state"; getprop | grep -Ei "display|screen|hall|fujisan|boot_completed"',32768,10),
+('qs-tiles.txt','settings get secure sysui_qs_tiles; settings get secure sysui_qs_auto_added_tiles',16384,8),
+('mode-settings.txt','settings list system | grep -Ei "dual|display|screen|fold|mirror"; settings list secure | grep -Ei "dual|display|screen|fold|mirror"; settings list global | grep -Ei "dual|display|screen|fold|mirror"',16384,10),
+('device-state.txt','dumpsys device_state; cat /proc/bus/input/devices',32768,10),
+('display-init.txt','cat /vendor/etc/init/init.fujisan.hall.rc /vendor/etc/init/init.fujisan.hwcomposer.rc; ps -A | grep -Ei "hall|display|screen|zte"',16384,10)
+]
+for name,command,cap,seconds in commands:write_text_capture(c,out,state,name,command,cap,seconds)
+state['complete']=True;save_state(out,state);print('Display modes capture finished',flush=True)

@@ -1,0 +1,20 @@
+{
+  "passed": true,
+  "bytes": 6979321856,
+  "source_sha256": "508cd08359c6602c36d1bf0a2711dc064bfae509b5773b55933d68ad1f2570a8",
+  "image_sha256": "33db1d4d4e5e49f5dc1c06cbd6a0e39b07fd9b6d886941e33f165b7876fccc5a",
+  "path": "/vendor/etc/init/android.hardware.usb@1.0-service.rc",
+  "source_file_sha256": "386ee38f0e558cefe689dba87a513d311380d98906a279d2775ec0773987db92",
+  "target_file_sha256": "77b3cb1253f3c113cc783d298a1e2dd603f14bc56fbe280f8f7b51aa1de37c9f",
+  "offset": 2215178240,
+  "block_size": 4096,
+  "changed_file_bytes": 89,
+  "all_other_image_bytes_exact": true,
+  "inode_metadata_and_xattrs_unchanged": true,
+  "inode_metadata_sha256": "63b76c7cac57635b3c717a767b15740a044b0a53a2c08fbcb86d3dcfd7d6d8be",
+  "read_only_fsck_passed": true,
+  "native_hal_unchanged_sha256": "6ef50f071c02fa5e13dd3541cce9c276186f600ea6abb8d18ae00ba7e587968d",
+  "phone_operations": false,
+  "hardware_tested": false,
+  "logging_runtime_names": "test22 unchanged; existing cache archive is previous boot; use fresh RAM/live capture"
+}

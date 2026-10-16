@@ -1,0 +1,273 @@
+#!/usr/bin/env python3
+"""Pinned local RC payloads for Test20 adb-only Android diagnostics.
+
+Never edits a filesystem image, APEX, policy, binary or device. Existing files
+are transformed in memory; output payloads retain each original byte count.
+"""
+from pathlib import Path
+import hashlib
+import json
+import os
+import re
+
+ROOT = Path(__file__).resolve().parent
+SOURCES = ROOT/'los23-usb-rc-audit-sources'
+OUTPUT = ROOT/'los23-full-usb-payloads'
+SOURCE_MANIFEST_SHA = '0246e2546e38caaa779340727d723ec2279425f2985070287230050f935cae01'
+SOURCE_SYSTEM_SHA = '0271379d1402dc727b1c5f4a48333cf3db1f799d86370c19b5cafdecb4846f27'
+APEX_SERVICE_SHA = '6e3178a7592af91f618207506777b470b7990a4ebae0ab9d241f676c5d40af1e'
+USB_SHELL_SHA = 'de032af98f9a3f08f69e6c55e1fbfb59e394e91a366c99e48462254e6ce17ea8'
+MAIN = '/system/etc/init/hw/init.rc'
+BASE = '/system/etc/init/hw/init.usb.rc'
+CONFIG = '/system/etc/init/hw/init.usb.configfs.rc'
+QCOM_USB = '/vendor/etc/init/hw/init.qcom.usb.rc'
+VENDOR_USB = '/vendor/etc/init/hw/init.vendor.usb.rc'
+MSM_USB = '/vendor/etc/init/hw/init.msm.usb.configfs.rc'
+QCOM = '/vendor/etc/init/hw/init.qcom.rc'
+TARGET = '/vendor/etc/init/hw/init.target.rc'
+CHARGER = '/vendor/etc/init/zz-fujisan-charger.rc'
+USBD = '/system/etc/init/usbd.rc'
+HAL = '/vendor/etc/init/android.hardware.usb@1.0-service.rc'
+FUJISAN = '/system/etc/init/fujisan.rc'
+READY = 'property:sys.axon.usb.apex_ready=1 && property:sys.axon.usb.gadget_ready=1'
+
+
+def sha(data):
+    return hashlib.sha256(data).hexdigest()
+
+
+def require(ok, reason):
+    if not ok:
+        raise ValueError(reason)
+
+
+def blocks(text):
+    """Preserve exact source block spans, including trailing comments."""
+    starts = list(re.finditer(r'^(?:on |service |import )[^\n]*\n', text, re.M))
+    if not starts:
+        return text, []
+    result = []
+    for i, match in enumerate(starts):
+        end = starts[i+1].start() if i+1 < len(starts) else len(text)
+        result.append((match.group().strip(), text[match.start():end]))
+    return text[:starts[0].start()], result
+
+
+def block(text, header):
+    found = [value for name, value in blocks(text)[1] if name == header]
+    require(len(found) == 1, 'Nonunique RC block: '+header)
+    return found[0]
+
+
+def replace_block(text, header, replacement):
+    return text.replace(block(text, header), replacement, 1)
+
+
+def commands(text):
+    return [line.strip() for line in text.splitlines()
+            if line.strip() and not line.lstrip().startswith('#')]
+
+
+def read_sources():
+    data = (SOURCES/'manifest.json').read_bytes()
+    require(sha(data) == SOURCE_MANIFEST_SHA, 'Exact source manifest required')
+    manifest = json.loads(data)
+    require(len(manifest) == 121, 'Wrong source inventory')
+    result = {}
+    for path, entry in manifest.items():
+        raw = (SOURCES/entry['local']).read_bytes()
+        require(len(raw) == entry['bytes'] and sha(raw) == entry['sha256'], 'Source changed: '+path)
+        result[path] = raw.decode()
+    require(sha((ROOT/'los23-boot-startup-analysis/adbd-apex__etc__init.rc').read_bytes()) == APEX_SERVICE_SHA,
+            'Native APEX service changed')
+    shell = (ROOT/'los23-boot-startup-analysis/vendor__bin__init.qcom.usb.sh').read_bytes()
+    require(sha(shell) == USB_SHELL_SHA and commands(shell.decode())[0] == 'exit 0', 'USB shell is not the reviewed no-op')
+    return result, manifest
+
+
+def fit_original_size(original, replacement):
+    """Keep original inode size: strip only blank/comment lines if needed."""
+    wanted = len(original.encode())
+    lines = replacement.splitlines(keepends=True)
+    removed = []
+    while len(''.join(lines).encode()) > wanted:
+        # Preserve source copyright/license preambles. Only ordinary trailing
+        # explanatory comments (or blank lines) are eligible for compaction.
+        candidates = [i for i, line in enumerate(lines) if not line.strip()]
+        if not candidates:
+            candidates = [i for i, line in enumerate(lines) if line.lstrip().startswith('#') and not any(word in line.lower() for word in ('copyright', 'license', 'redistribution', 'warrant', 'liability', 'rights reserved'))]
+        require(candidates, 'No comment space for same-size payload')
+        i = candidates[-1]
+        removed.append(lines.pop(i).rstrip('\n'))
+    data = ''.join(lines).encode()
+    require(data.endswith(b'\n'), 'RC must end with newline')
+    return data + b'\n'*(wanted-len(data)), removed
+
+
+def transform(sources):
+    manifest_data = (SOURCES/'manifest.json').read_bytes()
+    require(sha(manifest_data) == SOURCE_MANIFEST_SHA, 'Exact source manifest required')
+    pinned = json.loads(manifest_data)
+    require(set(sources) == set(pinned), 'Source RC inventory differs')
+    require(all(sha(sources[path].encode()) == entry['sha256'] for path, entry in pinned.items()), 'Source RC input hash differs')
+    out = {}
+    # Main init owns the boot sequence and registers before imported actions.
+    main = sources[MAIN]
+    require(main.count('    perform_apex_config\n') == 2, 'Wrong APEX handoff count')
+    first = main.index('    perform_apex_config\n') + len('    perform_apex_config\n')
+    main = main[:first] + '    start axon-diag-test20\n    start axon-save-test20\n' + main[first:]
+    marker = ('    wait_for_prop apexd.status activated\n'
+              '    # Wait for KeyMints to receive APEX module info before starting code from updateable APEXes.\n'
+              '    # This is to prevent APEX modules from interfering in module measurement.\n'
+              '    wait_for_prop keystore.module_hash.sent true\n'
+              '    perform_apex_config\n')
+    require(main.count(marker) == 1, 'Exact post-data APEX handoff changed')
+    main = main.replace(marker, marker+'    setprop sys.axon.usb.apex_ready 1\n', 1)
+    main = replace_block(main, 'on property:sys.boot_from_charger_mode=1',
+                         '# Test20 charger enters normal startup directly; no second late-init bridge.\n\n')
+    main = replace_block(main, 'on charger', 'on charger\n    trigger late-init\n\n')
+    out[MAIN] = main
+
+    # Preserve native APEX-overridable base service and post-data permissions.
+    base = sources[BASE]
+    out[BASE] = blocks(base)[0] + block(base, 'on post-fs-data') + block(base, 'service adbd /system/bin/adbd --root_seclabel=u:r:su:s0') + (
+        'on init\n'
+        '    setprop sys.usb.configfs 1\n'
+        '    setprop sys.usb.adb.disabled 0\n\n'
+        'on property:vendor.sys.usb.adb.disabled=*\n'
+        '    setprop sys.usb.adb.disabled 0\n\n'
+        'on '+READY+'\n'
+        '    setprop persist.sys.usb.config adb\n'
+        '    setprop sys.usb.config adb\n\n'
+        'on boot\n'
+        '    setprop persist.sys.usb.config adb\n'
+        '    setprop sys.usb.config adb\n\n')
+
+    # Keep exact native none teardown and daemon-stop readiness reset.
+    cfg = sources[CONFIG]
+    out[CONFIG] = block(cfg, 'on property:sys.usb.config=none && property:sys.usb.configfs=1') + block(cfg, 'on property:init.svc.adbd=stopped')
+    start = block(cfg, 'on property:sys.usb.config=adb && property:sys.usb.configfs=1')
+    start = start.replace(' && property:sys.usb.configfs=1\n', ' && property:sys.usb.configfs=1 && '+READY+'\n', 1)
+    bind = block(cfg, 'on property:sys.usb.ffs.ready=1 && property:sys.usb.config=adb && property:sys.usb.configfs=1')
+    bind = bind.replace(' && property:sys.usb.configfs=1\n', ' && property:sys.usb.configfs=1 && '+READY+'\n', 1)
+    needle = '    write /config/usb_gadget/g1/UDC ${sys.usb.controller}\n'
+    require(bind.count(needle) == 1, 'Wrong adb UDC bind')
+    bind = bind.replace(needle,
+        '    write /sys/devices/soc/6a00000.ssusb/mode peripheral\n'
+        '    write /config/usb_gadget/g1/idVendor 0x18d1\n'
+        '    write /config/usb_gadget/g1/idProduct 0x4ee7\n'+needle, 1)
+    out[CONFIG] += start + bind
+
+    # Keep the vendor's configfs setup, but construct only the adb function.
+    q = sources[QCOM_USB]
+    setup = block(q, 'on boot')
+    setup_lines = []
+    for line in setup.splitlines(keepends=True):
+        if line == 'on boot\n': line = 'on init\n'
+        if '/functions/' in line and '/functions/ffs.adb' not in line: continue
+        if '/sys/class/android_usb/' in line or 'enable qcom-usb-sh' in line: continue
+        setup_lines.append(line)
+    setup = ''.join(setup_lines).rstrip()+'\n    setprop sys.axon.usb.gadget_ready 1\n\n'
+    out[QCOM_USB] = blocks(q)[0] + setup + block(q, 'service qcom-usb-sh /vendor/bin/init.qcom.usb.sh')
+    # Do not run the legacy native composition helper. Its binary need not change.
+    v = sources[VENDOR_USB]
+    service = block(v, 'service usbconfig /vendor/bin/usbconfig')
+    service = service.replace('    class main\n', '    class main\n    disabled\n', 1)
+    out[VENDOR_USB] = blocks(v)[0] + service
+
+    # Remove every shipped non-adb bind/start action, while accepting all their
+    # advertised property values. Requests redirect without enumerating MTP/etc.
+    modes = set()
+    for path in (BASE, CONFIG, QCOM_USB, VENDOR_USB, MSM_USB):
+        modes.update(re.findall(r'property:sys\.usb\.config=([^\s]+)', sources[path]))
+    require(len(modes) == 170 and {'adb', 'none', 'mtp', 'mtp,adb'} <= modes, 'Composition inventory changed')
+    out[MSM_USB] = blocks(sources[MSM_USB])[0] + '# Test20: all supported composite requests remain adb-only.\n\n'
+    for mode in sorted(modes-{'adb', 'none'}):
+        out[MSM_USB] += 'on property:sys.usb.config='+mode+'\n    setprop sys.usb.config adb\n\n'
+
+    # Charger follows the same normal fs/APEX/USB path, without power collapse,
+    # a second system mount, a second UI, or the mass-storage property override.
+    qcom = replace_block(sources[QCOM], 'on charger', '# Test20: charger follows main late-init.\n\n')
+    qcom = qcom.replace('service charger /charger\n    class charger\n',
+                        'service charger /charger\n    class charger\n    disabled\n', 1)
+    out[QCOM] = qcom
+    out[TARGET] = replace_block(sources[TARGET], 'on charger', '# Test20: normal boot owns CPUs, sleep state and mounts.\n\n')
+    out[CHARGER] = sources[CHARGER].replace('    class charger\n', '    class charger\n    disabled\n', 1)
+    # Framework USB role and default-composition daemons are intentionally
+    # unavailable for this fixed peripheral diagnostic. Remove the lazy HAL
+    # interface declaration as well as disabling class startup.
+    out[USBD] = sources[USBD].replace('    class late_start\n', '    disabled\n', 1)
+    hal = sources[HAL]
+    require(hal.count('    interface android.hardware.usb@1.0::IUsb default\n') == 1, 'USB HAL interface changed')
+    out[HAL] = hal.replace('    interface android.hardware.usb@1.0::IUsb default\n', '    disabled\n', 1)
+    # Existing optional Wi-Fi adb action must not start the absent base service
+    # before its APEX service override has been parsed.
+    fujisan = sources[FUJISAN]
+    require(fujisan.count('on property:persist.sys.wifiadb.enable=1\n') == 1, 'Wi-Fi adb action changed')
+    out[FUJISAN] = fujisan.replace('on property:persist.sys.wifiadb.enable=1\n',
+        'on property:persist.sys.wifiadb.enable=1 && '+READY+'\n', 1)
+    payloads, compacted = {}, {}
+    for path, text in out.items():
+        payloads[path], compacted[path] = fit_original_size(sources[path], text)
+    validate_scope(sources, payloads)
+    return payloads, compacted, sorted(modes-{'adb','none'})
+
+
+def validate_scope(sources, payloads):
+    texts = dict(sources)
+    texts.update({path: data.decode() for path, data in payloads.items()})
+    active = [(path, header, commands(value)[1:]) for path, text in texts.items()
+              for header, value in blocks(text)[1]]
+    binds = [(p,h,c) for p,h,cs in active for c in cs if c.startswith('write /config/usb_gadget/g1/UDC ') and '"none"' not in c]
+    require(len(binds) == 1 and binds[0][0] == CONFIG and 'sys.usb.ffs.ready=1' in binds[0][1]
+            and READY in binds[0][1], 'Unexpected or unguarded UDC bind')
+    for p,h,cs in active:
+        for c in cs:
+            if c == 'start adbd': require(READY in h, 'Adbd start before APEX/gadget readiness: '+p)
+            require(not c.startswith('write /sys/class/android_usb/android0/enable 1'), 'Legacy gadget bind remains')
+            if c.startswith('symlink /config/usb_gadget/g1/functions/'):
+                require(c == 'symlink /config/usb_gadget/g1/functions/ffs.adb /config/usb_gadget/g1/configs/b.1/f1', 'Non-adb function link remains')
+            require(c != 'class_start charger', 'Charger class startup remains')
+            require(not c.startswith('setenforce '), 'Runtime enforcement writer present')
+            require(c != 'setprop service.adb.root 0', 'Root disabling action present')
+    require(block(texts[BASE], 'service adbd /system/bin/adbd --root_seclabel=u:r:su:s0') ==
+            block(sources[BASE], 'service adbd /system/bin/adbd --root_seclabel=u:r:su:s0'), 'Base service changed')
+    bind = block(texts[CONFIG], binds[0][1])
+    require(bind.index('6a00000.ssusb/mode peripheral') < bind.index('write /config/usb_gadget/g1/UDC'), 'Peripheral mode must precede bind')
+    require(texts[MAIN].count('trigger late-init') == 1, 'Duplicate late-init bridge')
+    require(all(len(data) == len(sources[path].encode()) for path,data in payloads.items()), 'Payload changes original size')
+
+
+def main():
+    os.umask(0o077)
+    require(not OUTPUT.exists() and not OUTPUT.is_symlink(), 'Immutable output already exists')
+    sources, manifest = read_sources()
+    payloads, compacted, redirected = transform(sources)
+    OUTPUT.mkdir(mode=0o700)
+    entries = []
+    for path, data in sorted(payloads.items()):
+        name = path[1:].replace('/', '__')
+        with (OUTPUT/name).open('xb') as stream: stream.write(data)
+        entries.append(dict(filesystem_path=path, payload_file=name, original_sha256=manifest[path]['sha256'],
+                            output_sha256=sha(data), original_bytes=manifest[path]['bytes'], output_bytes=len(data),
+                            comment_or_blank_lines_removed_for_size=len(compacted[path])))
+    result = dict(passed=True, source_system_sha256=SOURCE_SYSTEM_SHA, source_manifest_sha256=SOURCE_MANIFEST_SHA,
+        source_rc_files_checked=121, files=entries, non_adb_config_values_redirected=redirected,
+        single_adb_UDC_bind_gated_on_functionfs_APEX_and_gadget_readiness=True,
+        peripheral_mode_write_precedes_binding=True, signed_APEX_and_service_unchanged=True,
+        qcom_usb_shell_already_noop=True, native_init_or_adbd_binary_modified=False,
+        main_early_logger_start_names=['axon-diag-test20','axon-save-test20'],
+        shared_system_image_modified=False, phone_or_remote_actions=False, hardware_tested=False,
+        limitations=['Diagnostic-only: automatic USB role switching, MTP, tethering and other USB compositions intentionally unavailable.',
+          'Existing APEX and KeyMint waits are preserved. If either stalls, adb will not start; bounded early logs must expose that state.',
+          'APEX-ready marker proves command ordering, not successful execution; runtime service/path and logs still require verification.',
+          'Unknown USB config strings have no bind handler; only the 168 original non-adb/non-none values redirect.',
+          'None teardown remains supported; an explicit none request can leave USB disconnected until a subsequent adb/composite request.',
+          'USB HAL declaration removal disables lazy startup for this diagnostic, which may produce framework USB availability errors.',
+          'Security defaults/native-init policy and logger files are separate reviewed payloads required by assembly.',
+          'No full OS, filesystem formatting or hardware readiness is asserted.'])
+    with (OUTPUT/'manifest.json').open('x') as stream: json.dump(result,stream,indent=2);stream.write('\n')
+    print(json.dumps({'passed':True,'payload_files':len(entries),'same_size':True,'UDC_bind_actions':1,'hardware_tested':False}))
+
+
+if __name__ == '__main__': main()

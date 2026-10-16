@@ -1,0 +1,276 @@
+#!/usr/bin/env python3
+"""Local-only conditional Test17 builder; default is source/static validation.
+
+No build is allowed until the full Test16 after-cache receipt, actual backup,
+read-only extraction manifest, and explicit absence evidence all verify.
+This script never accesses a phone, SSH, USB, or a physical block device.
+"""
+import argparse
+import gzip
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import subprocess
+import sys
+import uuid
+
+sys.dont_write_bytecode = True
+ROOT = Path(__file__).resolve().parent
+sys.path.insert(0, str(ROOT.parent / 'ZTE-Axon-M-Flash-Tool/scripts'))
+from fujisan_image import BootImage, cpio_entries, gzip_member, report, sign_image
+
+SOURCE_SHA = '195e811d725dc034826f6bcd6e42448e99d82b25afb1acb4f2100fa849b31859'
+SOURCE_NAME = 'test-16-runtime-logs-boot-adb-only.img'
+TARGET_NAME = 'test-17-early-runtime-logs-boot-adb-only.img'
+CACHE_BYTES = 1718616064
+GPT_SHA = '7f1e4fd44e69e004189f0256ce6d35addfb1e3dbfe1cd55bfd2047b580b1e891'
+FILES = ('init.rc', 'sbin/axon-diag-collect.sh', 'sbin/axon-diag-persist.sh')
+OLD_START = b'on post-fs\n    start axon_diag_collect\n    start axon_diag_persist\n'
+START_COMMANDS = b'    start axon_diag_collect\n    start axon_diag_persist\n'
+TMP_ANCHOR = (b'    mount tmpfs tmpfs /tmp\n\n'
+              b'    chown root shell /tmp\n    chmod 0775 /tmp\n')
+OLD_COMMENT = b'# Test16 private diagnostics. Import after the published init.rc actions.\n'
+NEW_COMMENT = b'# Test17 private diagnostics. Starts are inserted into the main on-init action.\n'
+
+
+def sha(data):
+    return hashlib.sha256(data).hexdigest()
+
+
+def require(condition, message):
+    if not condition:
+        raise ValueError(message)
+
+
+def read_json(path):
+    require(path.is_file() and not path.is_symlink(), 'Required local evidence file is missing or symlinked')
+    return json.loads(path.read_text())
+
+
+def file_sha(path):
+    require(path.is_file() and not path.is_symlink(), 'Required regular local evidence file is missing')
+    digest = hashlib.sha256()
+    with path.open('rb') as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b''):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def validate_cache_gate(root=ROOT):
+    """No UUID or private log contents are included in errors or printed reports."""
+    after = root / 'hardware-tests/test16-cache-after'
+    receipt_path = after / 'local-verification.json'
+    receipt = read_json(receipt_path)
+    manifest = read_json(after / 'backup.json')
+    before = read_json(root / 'hardware-tests/test16-cache-before/local-verification.json')
+    require(receipt.get('full_cache_backup_verified_on_both_macs') is True
+            and receipt.get('bytes') == CACHE_BYTES,
+            'Full Test16 after-cache verification receipt is required')
+    digest = receipt.get('raw_sha256')
+    require(isinstance(digest, str) and re.fullmatch('[0-9a-f]{64}', digest), 'Invalid after-cache digest')
+    require(manifest.get('complete') is True and manifest.get('writes_sent') is False
+            and manifest.get('reset_sent') is False
+            and (manifest.get('start_sector'), manifest.get('sectors'), manifest.get('bytes'))
+                == (15204376, 3356672, CACHE_BYTES)
+            and manifest.get('raw_sha256') == digest,
+            'After-cache backup manifest does not prove the complete read-only capture')
+    require(before.get('full_cache_backup_verified_on_both_macs') is True
+            and before.get('bytes') == CACHE_BYTES,
+            'Original verified cache receipt is required')
+    try:
+        cache_uuid = str(uuid.UUID(receipt['cache_uuid']))
+        before_uuid = str(uuid.UUID(before['cache_uuid']))
+    except (KeyError, ValueError, TypeError, AttributeError):
+        raise ValueError('Verified cache UUID is unavailable') from None
+    require(cache_uuid == before_uuid, 'Cache UUID changed between verified captures')
+    cache = after / 'cache.bin'
+    require(cache.is_file() and not cache.is_symlink() and cache.stat().st_size == CACHE_BYTES,
+            'Actual complete after-cache file is required')
+    require(file_sha(cache) == digest, 'Actual after-cache file does not match its receipt')
+    with cache.open('rb') as stream:
+        header = stream.read(4096)
+    require(header == (after / 'cache-header.bin').read_bytes()
+            and header[1080:1082] == b'\x53\xef'
+            and str(uuid.UUID(bytes=header[1128:1144])) == cache_uuid,
+            'After-cache superblock differs from its verified identity')
+    require(file_sha(after / 'gpt.bin') == GPT_SHA, 'After-cache GPT identity mismatch')
+
+    extraction_path = root / 'hardware-tests/test16-cache-extracted-after/extraction.json'
+    extraction = read_json(extraction_path)
+    require(extraction.get('source_image') == str(cache.resolve())
+            and extraction.get('debugfs_read_only') is True
+            and extraction.get('manifest_errors') == []
+            and isinstance(extraction.get('files'), dict),
+            'Read-only Test16 after-cache extraction manifest is required')
+    require(not any(name.startswith('/axon-diag-test16/') or name == '/axon-diag-test16'
+                    for name in extraction['files']),
+            'Test16 diagnostics exist: inspect them before considering Test17')
+    require(extraction.get('diagnostic_hash_checks') == {},
+            'Test16 diagnostic checks exist: inspect them before considering Test17')
+    evidence = read_json(root / 'test17-no-test16-diagnostics.json')
+    required_flags = ('after_cache_capture_reviewed', 'test16_diagnostics_absent',
+                      'test16_diagnostic_directory_absent', 'no_test16_logs_in_recovery_files')
+    require(all(evidence.get(flag) is True for flag in required_flags),
+            'Explicit reviewed absence of Test16 diagnostics is required')
+    require(evidence.get('cache_after_raw_sha256') == digest
+            and evidence.get('cache_after_receipt_sha256') == sha(receipt_path.read_bytes())
+            and evidence.get('extraction_manifest_sha256') == sha(extraction_path.read_bytes())
+            and evidence.get('diagnostic_directory') == '/axon-diag-test16',
+            'Absence evidence is not bound to the verified after-cache capture/extraction')
+    # Directory absence must be an explicit read-only debugfs probe from this
+    # exact image, not an inference from a missing allowlisted regular file.
+    probe_path = root / 'test17-test16-directory-probe.json'
+    probe = read_json(probe_path)
+    require(evidence.get('directory_probe_sha256') == sha(probe_path.read_bytes())
+            and probe.get('source_cache_sha256') == digest
+            and probe.get('source_image') == str(cache.resolve())
+            and probe.get('read_only') is True
+            and probe.get('command') == 'stat /axon-diag-test16'
+            and probe.get('directory_absent') is True,
+            'Explicit read-only Test16 diagnostic-directory absence probe is required')
+    return {'cache_uuid': cache_uuid, 'raw_sha256': digest,
+            'after_receipt_sha256': sha(receipt_path.read_bytes()),
+            'absence_evidence_sha256': sha((root / 'test17-no-test16-diagnostics.json').read_bytes())}
+
+
+def expected_persist_template(original):
+    value, count = re.subn(rb'(?m)^EXPECTED_CACHE_UUID=[0-9a-f-]{36}$',
+                          b'EXPECTED_CACHE_UUID=__AXON_CACHE_UUID__', original)
+    require(count == 1, 'Source persister has an unexpected UUID assignment')
+    value = value.replace(b'Test16', b'Test17').replace(b'test16', b'test17')
+    alias = b'BYNAME=/dev/block/bootdevice/by-name/cache\n'
+    check = b'    [ "$(/sbin/readlink -f "$BYNAME")" = "$NODE" ] || exit 12\n'
+    mount = b'"$BYNAME" "$MOUNTPOINT"'
+    require(value.count(alias) == value.count(check) == value.count(mount) == 1,
+            'Unexpected source by-name dependency')
+    return value.replace(alias, b'').replace(check, b'').replace(mount, b'"$NODE" "$MOUNTPOINT"')
+
+
+def transform_init(original, snippet):
+    require(original.count(OLD_START) == original.count(OLD_COMMENT) == 1,
+            'Expected one original post-fs diagnostic start block')
+    require(original.count(TMP_ANCHOR) == 1, 'Expected one exact main on-init /tmp setup')
+    suffix = original[original.index(OLD_COMMENT):]
+    expected_snippet = suffix.replace(OLD_START, b'').replace(OLD_COMMENT, NEW_COMMENT)
+    require(snippet == expected_snippet, 'Service definitions must remain byte-exact')
+    updated = original.replace(suffix, snippet)
+    updated = updated.replace(TMP_ANCHOR, TMP_ANCHOR + '\n'.encode() + START_COMMANDS)
+    require(updated.count(START_COMMANDS) == 1 and OLD_START not in updated,
+            'Diagnostics must start exactly once in the main on-init action')
+    action = updated.split(b'\non init\n', 1)[1].split(b'\non ', 1)[0]
+    require(TMP_ANCHOR + b'\n' + START_COMMANDS in action, 'Diagnostic starts are not in main on-init')
+    require(b'on charger\n    trigger late-init\n' in original
+            and updated.count(b'on charger\n    trigger late-init\n') == 1,
+            'Existing charger late-init path must remain exact')
+    return updated
+
+
+def validate_sources(root=ROOT):
+    data = (root / 'prepared' / SOURCE_NAME).read_bytes()
+    require(sha(data) == SOURCE_SHA, 'Source must be the exact flashed Test16 image')
+    boot = BootImage(data)
+    _, raw, tail = gzip_member(boot.ramdisk)
+    require(not tail, 'Unexpected ramdisk gzip trailer')
+    entries = cpio_entries(raw)
+    by_name = {name: (fields, content, encoded) for name, fields, content, encoded in entries}
+    require(all(name in by_name for name in FILES), 'Missing exact Test16 diagnostic entries')
+    collect = (root / 'test17-collect.sh').read_bytes()
+    persist = (root / 'test17-persist.sh').read_bytes()
+    snippet = (root / 'test17-init.rc').read_bytes()
+    require(collect == by_name[FILES[1]][1].replace(b'Test16', b'Test17').replace(b'test16', b'test17'),
+            'Collector must differ only in diagnostic names')
+    require(persist == expected_persist_template(by_name[FILES[2]][1]),
+            'Persister differs beyond names and the fixed-node early-start adaptation')
+    require(b'BYNAME' not in persist and b'/bootdevice/by-name/' not in persist
+            and persist.count(b'__AXON_CACHE_UUID__') == 1,
+            'Early persister must use only the fixed verified cache node')
+    init = transform_init(by_name['init.rc'][1], snippet)
+    for source in (collect, persist):
+        result = subprocess.run(['/bin/sh', '-n'], input=source, capture_output=True, check=False)
+        require(result.returncode == 0, 'Diagnostic shell syntax check failed')
+    return boot, entries, {'init.rc': init, FILES[1]: collect, FILES[2]: persist}
+
+
+def encode(name, fields, content, original):
+    fields = list(fields)
+    fields[6] = len(content)
+    if original[:6] == b'070702':
+        fields[12] = sum(content) & 0xffffffff
+    header = original[:6] + ''.join(f'{n:08x}' for n in fields).encode() + name.encode() + b'\0'
+    packed = header + b'\0' * (-len(header) % 4) + content
+    return packed + b'\0' * (-len(packed) % 4)
+
+
+def build(root=ROOT):
+    # This gate runs before constructing/compressing a ramdisk or signing an image.
+    pin = validate_cache_gate(root)
+    boot, entries, updates = validate_sources(root)
+    destination = root / 'prepared' / TARGET_NAME
+    outputs = (destination, destination.with_suffix('.validation.json'), destination.with_suffix('.img.json'))
+    require(not any(path.exists() or path.is_symlink() for path in outputs),
+            'Test17 artifacts already exist; refusing overwrite')
+    updates[FILES[2]] = updates[FILES[2]].replace(b'__AXON_CACHE_UUID__', pin['cache_uuid'].encode())
+    packed = bytearray()
+    for name, fields, content, original in entries:
+        packed.extend(encode(name, fields, updates[name], original) if name in updates else original)
+    packed.extend(b'\0' * (-len(packed) % 512))
+    new_entries = cpio_entries(bytes(packed))
+    require([entry[0] for entry in new_entries] == [entry[0] for entry in entries], 'Archive membership/order changed')
+    for before, after in zip(entries, new_entries):
+        if before[0] not in updates:
+            require(before == after, 'An unrelated encoded ramdisk entry changed')
+        else:
+            require(after[2] == updates[before[0]], 'Diagnostic ramdisk content differs from validation')
+            old_fields, new_fields = list(before[1]), list(after[1])
+            old_fields[6] = new_fields[6]
+            if before[3][:6] == b'070702':
+                old_fields[12] = new_fields[12]
+            require(old_fields == new_fields, 'Diagnostic file metadata changed')
+    checked = subprocess.run(['/usr/bin/cpio', '-it'], input=bytes(packed), capture_output=True, check=False)
+    require(checked.returncode == 0, 'External cpio rejected new ramdisk')
+    ramdisk = gzip.compress(bytes(packed), compresslevel=9, mtime=0)
+    signed = sign_image(boot.rebuild(ramdisk=ramdisk), '/boot',
+                        str(root / 'keys/axon-m-local.key'), str(root / 'keys/axon-m-local.pem'))
+    new = BootImage(signed)
+    require(new.kernel == boot.kernel and new.cmdline == boot.cmdline
+            and new.second == boot.second and boot.rebuild(ramdisk=new.ramdisk) == new.payload,
+            'Kernel, DT, command line or non-ramdisk payload changed')
+    info = report(signed)
+    require(info['signature_verified'] and info['boot_id_valid'] and info['signature_target'] == '/boot',
+            'Final Test17 image validation failed')
+    validation = {'source_sha256': SOURCE_SHA, 'image_sha256': sha(signed), 'image_bytes': len(signed),
+                  'padded_sha256': sha(signed + b'\0' * (-len(signed) % 512)),
+                  'kernel_dt_cmdline_exact_to_test16': True, 'usb_and_charger_paths_unchanged': True,
+                  'ramdisk_changed_files': list(FILES), 'all_other_encoded_entries_exact': True,
+                  'services_exact_starts_moved_into_main_on_init_after_tmp': True,
+                  'persister_fixed_cache_node_geometry_type_uuid_checks': True,
+                  'test16_after_cache_verified_sha256': pin['raw_sha256'],
+                  'test16_absence_evidence_sha256': pin['absence_evidence_sha256'],
+                  'test16_after_receipt_sha256': pin['after_receipt_sha256'],
+                  'signature_verified': True, 'boot_id_valid': True, 'hardware_tested': False}
+    blobs = (signed, (json.dumps(validation, indent=2) + '\n').encode(),
+             (json.dumps(info, indent=2) + '\n').encode())
+    for path, blob in zip(outputs, blobs):
+        with path.open('xb') as stream:
+            stream.write(blob)
+    return validation
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--build', action='store_true', help='Requires verified Test16 after-cache absence evidence')
+    args = parser.parse_args(argv)
+    os.umask(0o077)
+    if args.build:
+        result = build()
+    else:
+        validate_sources()
+        result = {'static_source_validation_passed': True, 'image_built': False,
+                  'requires_verified_after_cache_and_explicit_absence_evidence': True}
+    print(json.dumps(result, indent=2))
+
+
+if __name__ == '__main__':
+    main()

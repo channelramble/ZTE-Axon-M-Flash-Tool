@@ -1,0 +1,80 @@
+#!/usr/bin/env python3
+"""Focused offline guards and declarative trigger checks, not an init emulator."""
+import copy
+import itertools
+import json
+from pathlib import Path
+import re
+import subprocess
+import sys
+import tempfile
+import prepare_los23_full_usb as m
+
+checks=[]
+def check(name,condition):
+    if not condition: raise AssertionError(name)
+    checks.append(dict(check=name,passed=True))
+def reject(name,fn):
+    try: fn()
+    except ValueError as error: checks.append(dict(check=name,passed=True,reason=str(error)))
+    else: raise AssertionError(name)
+
+sources,manifest=m.read_sources()
+payloads,_,redirected=m.transform(sources)
+check('all 12 payloads reproduce exactly and retain original inode byte counts', len(payloads)==12 and
+      all(data==(m.OUTPUT/manifest[path]['local']).read_bytes() and len(data)==manifest[path]['bytes'] for path,data in payloads.items()))
+bad=dict(sources);bad[m.MAIN]=bad[m.MAIN].replace('perform_apex_config','perform_apex_wrong',1)
+reject('mutated source is rejected before transformations',lambda:m.transform(bad))
+missing=dict(sources);missing.pop(m.CONFIG)
+reject('missing RC source fails closed',lambda:m.transform(missing))
+alltexts=dict(sources);alltexts.update({path:data.decode() for path,data in payloads.items()})
+main=m.commands(alltexts[m.MAIN])
+bootstrap=main.index('perform_apex_config')
+check('logger services start immediately after first APEX config',main[bootstrap+1:bootstrap+3]==['start axon-diag-test20','start axon-save-test20'])
+activation=main.index('wait_for_prop apexd.status activated')
+check('USB readiness marker follows existing activation/keymint waits and second APEX config',main[activation:activation+4]==[
+ 'wait_for_prop apexd.status activated','wait_for_prop keystore.module_hash.sent true','perform_apex_config','setprop sys.axon.usb.apex_ready 1'])
+blocks=[(path,header,m.commands(body)[1:]) for path,text in alltexts.items() for header,body in m.blocks(text)[1]]
+bind=[(h,c) for p,h,c in blocks if 'write /config/usb_gadget/g1/UDC ${sys.usb.controller}' in c]
+check('one UDC binding action in all 121 RC files',len(bind)==1)
+def enabled(header,values):
+    terms=re.findall(r'property:([^=\s]+)=([^\s]+)',header)
+    return all(values.get(key)==value or value=='*' and key in values for key,value in terms)
+for apex,gadget,ffs in itertools.product(('0','1'),repeat=3):
+ values={'sys.usb.config':'adb','sys.usb.configfs':'1','sys.axon.usb.apex_ready':apex,'sys.axon.usb.gadget_ready':gadget,'sys.usb.ffs.ready':ffs}
+ expected=(apex,gadget,ffs)==('1','1','1')
+ if enabled(bind[0][0],values)!=expected:raise AssertionError('readiness truth table')
+checks.append(dict(check='UDC binding requires all three readiness states (8 combinations)',passed=True))
+redirect_actions={h[len('on property:sys.usb.config='):]:c for p,h,c in blocks if p==m.MSM_USB}
+check('every one of 168 non-adb shipped modes only redirects to adb',len(redirected)==168 and
+      all(redirect_actions[value]==['setprop sys.usb.config adb'] for value in redirected))
+check('peripheral mode precedes sole UDC binding',bind[0][1].index('write /sys/devices/soc/6a00000.ssusb/mode peripheral') <
+      bind[0][1].index('write /config/usb_gadget/g1/UDC ${sys.usb.controller}'))
+for path in (m.USBD,m.HAL,m.VENDOR_USB):
+ service=[c for p,h,c in blocks if p==path and h.startswith('service ')][0]
+ if 'disabled' not in service:raise AssertionError('controller enabled')
+check('automatic USB controllers disabled and lazy role-HAL declaration removed', 'interface android.hardware.usb@1.0::IUsb default' not in alltexts[m.HAL])
+check('charger event has one normal-startup bridge and no remaining charger class start',
+      sum(c.count('trigger late-init') for p,h,c in blocks)==1 and not any('class_start charger' in c for p,h,c in blocks))
+noneheader='on property:sys.usb.config=none && property:sys.usb.configfs=1'
+check('native none teardown and adbd-stop readiness reset preserved',
+      m.commands(m.block(alltexts[m.CONFIG],noneheader))==m.commands(m.block(sources[m.CONFIG],noneheader)) and
+      m.commands(m.block(alltexts[m.CONFIG],'on property:init.svc.adbd=stopped'))==
+      m.commands(m.block(sources[m.CONFIG],'on property:init.svc.adbd=stopped')))
+badpayloads=dict(payloads)
+badpayloads[m.CONFIG]=badpayloads[m.CONFIG].replace(b'property:sys.usb.ffs.ready=1',b'property:sys.usb.ffs.ready=0',1)
+reject('removed FFS-ready bind gate fails static audit',lambda:m.validate_scope(sources,badpayloads))
+badpayloads=dict(payloads)
+badpayloads[m.CONFIG]=badpayloads[m.CONFIG].replace(b'/functions/ffs.adb /config/',b'/functions/ffs.mtp /config/',1)
+reject('MTP link injection fails static audit',lambda:m.validate_scope(sources,badpayloads))
+before={p.name:m.sha(p.read_bytes()) for p in m.OUTPUT.iterdir() if p.is_file()}
+r=subprocess.run([sys.executable,str(m.ROOT/'prepare_los23_full_usb.py')],capture_output=True,text=True)
+check('existing payload directory rejected with all files unchanged',r.returncode!=0 and 'Immutable output already exists' in r.stderr and
+      before=={p.name:m.sha(p.read_bytes()) for p in m.OUTPUT.iterdir() if p.is_file()})
+compile((m.ROOT/'prepare_los23_full_usb.py').read_text(),'prepare_los23_full_usb.py','exec')
+checks.append(dict(check='Python syntax',passed=True))
+result=dict(passed=True,checks=checks,builder_sha256=m.sha((m.ROOT/'prepare_los23_full_usb.py').read_bytes()),
+            payload_manifest_sha256=m.sha((m.OUTPUT/'manifest.json').read_bytes()),
+            hardware_tested=False,scope='Declarative trigger/order and guard checks; not native init parser or hardware execution')
+with (m.ROOT/'los23-full-usb-offline-checks.json').open('x') as f:json.dump(result,f,indent=2);f.write('\n')
+print(json.dumps({'passed':True,'checks':len(checks),'builder_sha256':result['builder_sha256'],'manifest_sha256':result['payload_manifest_sha256']}))

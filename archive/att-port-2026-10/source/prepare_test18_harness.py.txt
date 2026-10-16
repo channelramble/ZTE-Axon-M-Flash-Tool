@@ -1,0 +1,38 @@
+#!/usr/bin/env python3
+"""Prepare local EDL scripts and plans only; no phone operations."""
+from pathlib import Path
+import hashlib,json,os
+os.umask(0o077)
+r=Path(__file__).resolve().parent
+sha=lambda b:hashlib.sha256(b).hexdigest()
+name='test-18-cleanup-boot-adb-only.img'
+image=(r/'prepared'/name).read_bytes()
+v=json.loads((r/'prepared'/name).with_suffix('.validation.json').read_text())
+assert sha(image)==v['image_sha256']
+padded=image+b'\0'*(-len(image)%512)
+assert sha(padded)==v['padded_sha256']
+before=(r/'hardware-tests/test17-usb-supplier-full-after/boot.bin').read_bytes()
+assert len(before)==67108864 and sha(before)=='4c7fb194e1ae769da5b668a9bbb6d17d0f8eda5eedee1e952247ba9fa35f237c'
+after=padded+before[len(padded):]
+spec=json.loads((r/'test17-usb-supplier-independent-audit.json').read_text())
+for key in ('raw_kernel_identical_to_test16','compressed_kernel_identical_to_test16','all_690_pointers_unchanged_from_test16','dt_changes'):
+ spec.pop(key,None)
+spec.update(image_sha256=sha(image),padded_sha256=sha(padded),expected_full_boot_before_sha256=sha(before),expected_full_boot_after_sha256=sha(after),raw_changed_bytes=23,source_for_raw_comparison='Test17',temporary_cleanup_skips=[],retained_init_memory_bytes=0,dt_byte_exact_to_test17=True)
+def save(n,data):
+ p=r/n
+ with p.open('x') as f:f.write(data)
+save('test18-cleanup-independent-audit.json',json.dumps(spec,indent=2)+'\n')
+for side in ('local','remote'):
+ p=json.loads((r/('test17-usb-supplier-'+side+'-plan.json')).read_text())
+ p={k:(x.replace('test17-usb-supplier','test18-cleanup').replace('test-17-usb-supplier','test-18-cleanup') if isinstance(x,str) else x) for k,x in p.items()}
+ p['image_sha256']=sha(image)
+ p['diagnostic_reason']='Restore genuine deferred synchronization, init-memory release and clock/regulator cleanup; preserve proven Test17 USB fix and adb-only startup. Unique Test18 persistent diagnostic logs.'
+ save('test18-cleanup-'+side+'-plan.json',json.dumps(p,indent=2)+'\n')
+for old,new in [('run_test17_usb.py','run_test18_cleanup.py'),('reset_test17_usb.py','reset_test18_cleanup.py'),('clear_test17_bcb.py','clear_test18_bcb.py')]:
+ s=(r/old).read_text().replace('test17-usb-supplier','test18-cleanup').replace('test-17-usb-supplier','test-18-cleanup').replace('reset_test17_usb.py','reset_test18_cleanup.py').replace('test17','test18').replace('Test17','Test18')
+ s=s.replace('e122e26f40da384a96594cb4826ca5f29fb5c07991d690f12266400c9d4f35af',sha(image)).replace('4c7fb194e1ae769da5b668a9bbb6d17d0f8eda5eedee1e952247ba9fa35f237c',sha(after))
+ s=s.replace('Temporary Test13 safeguards remain.','Original deferred waits and cleanup restored.')
+ if old.startswith('run_'):
+  s=s.replace("stage = sys.argv[1]", "stage = sys.argv[1]\nreview=json.loads((ROOT/'test18-cleanup-independent-review.json').read_text())\nassert review.get('passed') is True and review.get('image_sha256') == SHA((ROOT/'prepared/test-18-cleanup-boot-adb-only.img').read_bytes()), 'Independent artifact review required'")
+ save(new,s)
+print(json.dumps({'image_sha256':sha(image),'full_boot_after_sha256':sha(after),'files_only':True},indent=2))

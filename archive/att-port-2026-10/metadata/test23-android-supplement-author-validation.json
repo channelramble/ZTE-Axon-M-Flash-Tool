@@ -1,0 +1,42 @@
+{
+  "passed": true,
+  "script_sha256": "b0d67ee734cccd26e9a16a88aa0fc8462c461ad70edcb88acdd6a2d5c24c7072",
+  "transport_sha256": "9c89fc1ea65e3040cff4ee16758b20b3733c6ec2df2950b73e39700776b57254",
+  "checks": {
+    "all5exactpayloads_accepted": true,
+    "truncatedpayloads_rejected": true,
+    "duplicatepayloads_rejected": true,
+    "failedremotehash_rejected": true,
+    "seven_samples_exact180accepted": true,
+    "all_usb_checks_true_for_exactstate": true,
+    "six_samples_cannotclaimwindow": true,
+    "under180cannotclaimwindow": true,
+    "pid_changed_not_stable": true,
+    "pid_reused_not_stable": true,
+    "read_failed_not_stable": true,
+    "missing_stat_not_stable": true,
+    "capturewindow_doesnotfake_bootcomplete": true,
+    "host_mode_not_adb_peripheral": true,
+    "statfield22_parse_correct": true,
+    "usb_fields_parse": true,
+    "binder_found_parse": true,
+    "pid_stat_mismatch_rejected": true,
+    "multiple_systemservers_rejected": true,
+    "shell_syntax_identity": true,
+    "shell_syntax_patches": true,
+    "shell_syntax_observation": true,
+    "shell_syntax_crash": true,
+    "shell_syntax_framework": true,
+    "shell_syntax_events": true,
+    "shell_syntax_user_foreground": true,
+    "existing_patch_parser_exact": true,
+    "unchanged_test22logger_names": true
+  },
+  "phone_operations": false,
+  "limits": [
+    "Snapshots establish stability only at samples, not continuous tracing",
+    "Bounded logcat buffers may already have evicted older events",
+    "Capture completion is separate from boot/user-unlock or hardware success",
+    "Test22 cached diagnostic archives are deliberately not read by this supplement"
+  ]
+}

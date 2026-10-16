@@ -1,0 +1,224 @@
+#!/usr/bin/env python3
+"""Execute the exact persister control flow against temporary fake paths/tools.
+
+Only absolute path prefixes and the private UUID are substituted. No host block
+device, mount table, Android binary, system image or phone is opened by tests.
+"""
+from pathlib import Path
+import hashlib
+import json
+import os
+import re
+import subprocess
+import sys
+import tempfile
+import unittest
+
+ROOT = Path(__file__).resolve().parent
+PAYLOADS = ROOT / 'test20-logging-payloads'
+UUID = '01234567-89ab-cdef-0123-456789abcdef'
+STUB = r'''#!PYTHON
+from pathlib import Path
+import hashlib,json,os,sys
+root=Path(__file__).resolve().parents[1]
+state=json.loads((root/'state.json').read_text())
+name=Path(sys.argv[0]).name; args=sys.argv[1:]
+fd=os.open(str(root/'calls.jsonl'),os.O_WRONLY|os.O_APPEND|os.O_CREAT,0o600)
+os.write(fd,(json.dumps([name,args])+'\n').encode());os.close(fd)
+if name=='cat':
+    for p in args: sys.stdout.buffer.write(Path(p).read_bytes())
+elif name=='readlink': print(str(Path(args[-1]).resolve()))
+elif name=='timeout': os.execv(args[3],args[3:])
+elif name=='toybox':
+    assert args[0]=='blkid'
+    if state.get('blkid_failure'): sys.exit(2)
+    print(args[1]+': UUID="'+state['uuid']+'" TYPE="'+state['type']+'"')
+elif name=='mkdir':
+    try: os.mkdir(args[0])
+    except FileExistsError: sys.exit(1)
+elif name=='head':
+    assert args[0]=='-c'
+    sys.stdout.buffer.write(Path(args[2]).read_bytes()[:int(args[1])])
+elif name=='sha256sum':
+    print(hashlib.sha256(Path(args[0]).read_bytes()).hexdigest()+'  '+args[0])
+elif name=='ln': os.link(args[0],args[1])
+elif name=='rm': os.unlink(args[0])
+elif name in ('sync','sleep','setsid','kill'): pass
+else: raise SystemExit('unexpected tool '+name)
+'''
+
+
+class Fixture:
+    def __init__(self):
+        self.temp = tempfile.TemporaryDirectory(prefix='axon-test20-mock-')
+        # macOS /var aliases /private/var; use a canonical fixture root so that
+        # the mock readlink result has the same form as the fixed NODE value.
+        self.root = Path(self.temp.name).resolve()
+        self.ram = self.root / 'dev/axon-diag-test20'
+        self.cache = self.root / 'cache'
+        self.dest = self.cache / 'axon-diag-test20'
+        self.node = self.root / 'dev/block/mmcblk0p36'
+        self.sys = self.root / 'sys/class/block/mmcblk0p36'
+        for p in [self.ram, self.cache, self.node.parent, self.sys,
+                  self.root / 'proc', self.root / 'bin']:
+            p.mkdir(parents=True, exist_ok=True)
+        self.node.touch()
+        # Keep redirected diagnostics a character sink under shell noclobber;
+        # a regular fake /dev/null would incorrectly suppress later commands.
+        (self.root/'dev/null').symlink_to('/dev/null')
+        for name, value in [('start','15204376'),('size','3356672'),('dev','259:4')]:
+            (self.sys/name).write_text(value+'\n')
+        self.state = {'uuid': UUID, 'type': 'ext4'}
+        self.mounts([f'{self.node} {self.cache} ext4 rw,seclabel,relatime 0 0'])
+        for tool in ['cat','readlink','timeout','toybox','mkdir','head','sha256sum','sync','sleep',
+                     'ln','rm','setsid','kill']:
+            p = self.root/'bin'/tool
+            p.write_text(STUB.replace('PYTHON',sys.executable))
+            p.chmod(0o700)
+        source = (PAYLOADS/'axon-diag-test20-persist.sh').read_text()
+        source, n = re.subn(r'^EXPECTED_CACHE_UUID=.*$', 'EXPECTED_CACHE_UUID='+UUID,
+                            source, flags=re.M)
+        assert n == 1
+        # Replace longest prefixes first. These are locations, never logic.
+        source = source.replace('/system/bin', str(self.root/'bin'))
+        for prefix in ['/sys/','/proc/','/dev/']:
+            source = source.replace(prefix, str(self.root/prefix.strip('/'))+'/')
+        source = source.replace('/cache', str(self.cache))
+        self.script = self.root/'persist.sh'
+        self.script.write_text(source)
+
+    def mounts(self, lines):
+        (self.root/'proc/mounts').write_text('\n'.join(lines)+'\n')
+
+    def run(self):
+        (self.root/'state.json').write_text(json.dumps(self.state))
+        return subprocess.run(['/bin/sh',str(self.script),'--worker'],
+                              capture_output=True, timeout=15)
+
+    def close(self):
+        self.temp.cleanup()
+
+
+class PersisterMockTests(unittest.TestCase):
+    def setUp(self): self.f = Fixture()
+    def tearDown(self): self.f.close()
+
+    def rejected(self, expected):
+        result = self.f.run()
+        self.assertEqual(result.returncode, expected, result.stderr.decode())
+        self.assertFalse(self.f.dest.exists())
+
+    def test_wrong_start_size_device_rejected(self):
+        for name, value, expected in [('start','1',11),('size','2',12),('dev','179:1',13)]:
+            original = (self.f.sys/name).read_text()
+            (self.f.sys/name).write_text(value+'\n')
+            self.rejected(expected)
+            (self.f.sys/name).write_text(original)
+
+    def test_failed_blkid_rejected(self):
+        self.f.state['blkid_failure'] = True
+        self.rejected(14)
+
+    def test_wrong_uuid_rejected(self):
+        self.f.state['uuid'] = 'ffffffff-ffff-ffff-ffff-ffffffffffff'
+        self.rejected(16)
+
+    def test_wrong_filesystem_identity_rejected(self):
+        self.f.state['type'] = 'f2fs'
+        self.rejected(15)
+
+    def test_missing_cache_mount_rejected(self):
+        self.f.mounts([])
+        self.rejected(17)
+
+    def test_wrong_device_mount_rejected(self):
+        self.f.mounts([f'{self.f.node.parent}/mmcblk0p37 {self.f.cache} ext4 rw 0 0'])
+        self.rejected(17)
+
+    def test_wrong_mount_type_and_readonly_rejected(self):
+        for fs, opts in [('f2fs','rw'),('ext4','ro')]:
+            self.f.mounts([f'{self.f.node} {self.f.cache} {fs} {opts} 0 0'])
+            self.rejected(17)
+
+    def test_duplicate_and_alias_mounts_rejected(self):
+        valid = f'{self.f.node} {self.f.cache} ext4 rw 0 0'
+        for extra in [valid, f'{self.f.node} {self.f.root}/other ext4 rw 0 0']:
+            self.f.mounts([valid,extra])
+            self.rejected(17)
+
+    def test_valid_alias_resolves_to_fixed_partition(self):
+        alias = self.f.node.parent/'cache'
+        alias.symlink_to(self.f.node)
+        self.f.mounts([f'{alias} {self.f.cache} ext4 rw 0 0'])
+        (self.f.ram/'collector.ready').write_text('done\n')
+        result = self.f.run()
+        self.assertEqual(result.returncode,0,result.stderr.decode())
+        self.assertTrue((self.f.dest/'COMPLETE.txt').is_file())
+
+    def test_exclusive_valid_copy_and_hashes(self):
+        expected={'01-dmesg.txt':b'bounded kernel log\n','04-graphics.txt':b'graphics snapshot\n',
+                  'collector.txt':b'done\n'}
+        for name,data in expected.items():
+            (self.f.ram/(name[:-4]+'.ready')).write_bytes(data)
+        result = self.f.run()
+        self.assertEqual(result.returncode,0,result.stderr.decode())
+        sums=(self.f.dest/'SHA256SUMS').read_text().splitlines()
+        self.assertEqual(len(sums),3)
+        for name,data in expected.items():
+            self.assertEqual((self.f.dest/name).read_bytes(),data)
+            self.assertIn(hashlib.sha256(data).hexdigest()+'  '+name,sums)
+        before={p.name:p.read_bytes() for p in self.f.dest.iterdir()}
+        again=self.f.run()
+        self.assertEqual(again.returncode,18)
+        self.assertEqual(before,{p.name:p.read_bytes() for p in self.f.dest.iterdir()})
+
+    def test_destination_symlink_not_followed(self):
+        target=self.f.root/'outside';target.mkdir();(target/'sentinel').write_text('keep')
+        self.f.dest.symlink_to(target)
+        result=self.f.run()
+        self.assertEqual(result.returncode,18)
+        self.assertEqual(list(p.name for p in target.iterdir()),['sentinel'])
+
+    def test_oversized_source_fails_hash_before_complete(self):
+        (self.f.ram/'01-dmesg.ready').write_bytes(b'x'*262145)
+        (self.f.ram/'collector.ready').write_text('done\n')
+        result=self.f.run()
+        self.assertEqual(result.returncode,19)
+        self.assertFalse((self.f.dest/'COMPLETE.txt').exists())
+        self.assertEqual((self.f.dest/'SHA256SUMS').read_bytes(),b'')
+
+    def test_symlink_source_is_not_read(self):
+        outside=self.f.root/'do-not-copy';outside.write_bytes(b'outside evidence')
+        (self.f.ram/'01-dmesg.ready').symlink_to(outside)
+        (self.f.ram/'collector.ready').write_text('done\n')
+        self.assertEqual(self.f.run().returncode,0)
+        self.assertFalse((self.f.dest/'01-dmesg.txt').exists())
+
+    def test_collector_launches_only_28_groups_without_waiting(self):
+        # setsid is a recording stub: no diagnostic children or host kills run.
+        # Exercise the real finite supervisor/publication loop with fast sleeps.
+        self.f.ram.rmdir()
+        (self.f.root/'state.json').write_text(json.dumps(self.f.state))
+        source=(PAYLOADS/'axon-diag-test20-collect.sh').read_text()
+        source=source.replace('/system/bin',str(self.f.root/'bin'))
+        for prefix in ['/sys/','/proc/','/dev/']:
+            source=source.replace(prefix,str(self.f.root/prefix.strip('/'))+'/')
+        script=self.f.root/'collect.sh';script.write_text(source)
+        result=subprocess.run(['/bin/sh',str(script)],capture_output=True,timeout=15)
+        self.assertEqual(result.returncode,0,result.stderr.decode())
+        calls=[json.loads(l) for l in (self.f.root/'calls.jsonl').read_text().splitlines()]
+        launches=[args for name,args in calls if name=='setsid']
+        self.assertEqual(len(launches),28)
+        kinds=['identity','dmesg','logcat','usb','processes','stacks','graphics']
+        self.assertEqual({tuple(args[-2:]) for args in launches},
+                         {(snap,kind) for snap in ['01','02','03','04'] for kind in kinds})
+        self.assertEqual([args for name,args in calls if name=='sleep'],
+                         [['6'],['9'],['6'],['24'],['6'],['69'],['6']])
+        self.assertEqual(sum(name=='kill' for name,args in calls),56)
+        self.assertEqual(len(list(self.f.ram.glob('*.ready'))),29)
+        self.assertTrue((self.f.ram/'collector.ready').is_file())
+        self.assertIsNone(re.search(r'^\s*wait(?:\s|$)',source,flags=re.M))
+
+
+if __name__=='__main__':
+    unittest.main(verbosity=2)

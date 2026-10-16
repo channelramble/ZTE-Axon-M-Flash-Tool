@@ -1,0 +1,51 @@
+{
+  "classification": "diagnostic only; unavailable Gatekeeper HAL remains unavailable",
+  "target": "/system/bin/gatekeeperd",
+  "source": "test20-gatekeeperd-audit/gatekeeperd.original",
+  "source_sha256": "a4ecd5222e7e935057a867f97b2a425c90fa5a1fd7576207d212ee0c20238c94",
+  "source_bytes": 44800,
+  "payload": "gatekeeperd.diagnostic",
+  "output_sha256": "6ad0a440825550c3f5ec504bf438cabcbbb987cf581f088cb939d52164deb5f6",
+  "output_bytes": 44800,
+  "original_copy": "gatekeeperd.original",
+  "source_constructor": {
+    "start": "0x454c",
+    "end_exclusive": "0x48d4",
+    "sha256": "16811755ef98feadc0319268f2337c75efa97b9ed5ac2c962ec5d7898c37ade9"
+  },
+  "patch": {
+    "file_offset_and_va": "0x4678",
+    "before": "e80600b5",
+    "after": "37000014",
+    "before_instruction": "cbnz x8, 0x4754",
+    "after_instruction": "b 0x4754",
+    "changed_byte_offsets": [
+      "0x4678",
+      "0x4679",
+      "0x467b"
+    ],
+    "skipped_range": [
+      "0x467c",
+      "0x4754 (exclusive)"
+    ]
+  },
+  "preserved": [
+    "Constructor initialization of both HAL pointers to null",
+    "AIDL declared-service lookup; no AIDL service is declared in current ROM",
+    "Native missing-HAL error log and all permission/credential error handling",
+    "Normal framework binder publication after constructor returns",
+    "All other executable bytes, dependencies and ELF metadata"
+  ],
+  "limitations": [
+    "No software Gatekeeper backend is provided or enabled",
+    "Enrollment and verification retain native error responses with no HAL",
+    "PIN/password, biometric and authenticated-key functionality remain unavailable",
+    "The already failed vendor HAL may keep restarting unless separately stopped",
+    "This may reveal further framework boot errors; it does not establish Android usability",
+    "Not a method to unlock or preserve encrypted or credential-protected data",
+    "Must remain a reversible diagnostic for the freshly formatted test device"
+  ],
+  "source_reference": "https://raw.githubusercontent.com/LineageOS/android_system_core/eb2de7321317226bbc1951382b3171fa59bb4d1d/gatekeeperd/gatekeeperd.cpp",
+  "source_reference_note": "Current published lineage-23.2 source; exact shipped ELF independently decoded",
+  "phone_or_image_operations": false
+}

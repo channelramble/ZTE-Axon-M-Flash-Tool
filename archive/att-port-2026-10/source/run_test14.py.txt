@@ -1,0 +1,101 @@
+#!/usr/bin/env python3
+"""Explicit separate stages for Test14; never retries a phone operation."""
+from pathlib import Path
+import datetime
+import hashlib
+import json
+import shlex
+import subprocess
+import sys
+
+ROOT = Path(__file__).resolve().parent
+REMOTE = '/EXAMPLE/REMOTE_HOME/.local/share/axon-m-edl/sessions/SESSION_ID'
+PY = '/EXAMPLE/REMOTE_HOME/.local/share/axon-m-edl/.venv/bin/python'
+CONFIG = '/EXAMPLE/LOCAL_HOME/.crosstalk/ssh/config'
+NAME = 'test14-pre-async-green'
+SPEC = NAME + '-independent-audit.json'
+PLAN = NAME + '-remote-plan.json'
+SHA = lambda b: hashlib.sha256(b).hexdigest()
+
+def ssh(command, timeout=300):
+    subprocess.run(['ssh', '-F', CONFIG, '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10',
+                    'DEVICE_HOST', '$SHELL -lc ' + shlex.quote(command)], check=True, timeout=timeout)
+
+def remote_py(code, timeout=300):
+    ssh(PY + ' -c ' + shlex.quote(code), timeout)
+
+def scp(sources, dest):
+    subprocess.run(['scp', '-q', '-r', '-F', CONFIG, *map(str, sources), str(dest)], check=True, timeout=240)
+
+def state(**values):
+    p = ROOT / 'session.json'
+    s = json.loads(p.read_text())
+    s.update(values, updated_at=datetime.datetime.now(datetime.timezone.utc).isoformat())
+    p.write_text(json.dumps(s, indent=2) + '\n')
+
+stage = sys.argv[1]
+spec = json.loads((ROOT / SPEC).read_text())
+if stage == 'stage':
+    scp([ROOT / 'prepared/test-14-pre-async-green-boot-adb-only.img',
+         ROOT / SPEC, ROOT / PLAN, ROOT / 'reset_test14.py'], 'DEVICE_HOST:' + REMOTE + '/')
+    ssh(f'{PY} {REMOTE}/firehose_boot_test.py {REMOTE}/{PLAN}')
+elif stage == 'load':
+    assert not json.loads((ROOT / 'session.json').read_text())['programmer_loaded']
+    state(status='test14_loader_attempt_started')
+    ssh(f'{PY} {REMOTE}/sahara_load.py {REMOTE}/prog_emmc_firehose_fujisan.mbn', 40)
+    state(status='test14_programmer_loaded', programmer_loaded=True)
+elif stage in ('before', 'after'):
+    ssh(f'{PY} {REMOTE}/edl_full_audit.py {stage} {REMOTE}/{SPEC} {REMOTE}/{NAME}-full-{stage}')
+    state(status='test14_full_' + stage + '_verified_remotely')
+elif stage == 'write':
+    remote_py(f'''
+from pathlib import Path
+import hashlib,json,sys,signal
+root=Path({REMOTE!r});sys.path.insert(0,str(root))
+import firehose_boot_test as f
+spec=json.loads((root/{SPEC!r}).read_text())
+audit=root/{(NAME+'-full-before')!r}
+a=json.loads((audit/'audit.json').read_text())
+assert a['phase']=='complete' and a['all_verified'] and a['capture_phase']=='before'
+for name,expected in [('boot',spec['expected_full_boot_before_sha256']),('recovery',spec['expected_full_recovery_sha256']),('misc',spec['expected_misc_sha256']),('gpt','7f1e4fd44e69e004189f0256ce6d35addfb1e3dbfe1cd55bfd2047b580b1e891')]:
+    assert hashlib.sha256((audit/(name+'.bin')).read_bytes()).hexdigest()==expected,name
+values=f.load_plan(root/{PLAN!r})
+assert f.digest(values[1])=={spec['image_sha256']!r}
+assert f.digest(values[2])=={spec['padded_sha256']!r}
+assert f.report(values[1])['signature_verified']
+def deadline(*args): raise TimeoutError('Write deadline; no retry/reset')
+signal.signal(signal.SIGALRM,deadline);signal.alarm(180)
+f.execute(*values)
+''')
+    state(status='test14_boot_written_prefix_verified', current_boot_image='test-14-pre-async-green-boot-adb-only.img')
+elif stage == 'verify':
+    for name in (NAME+'-full-before', NAME+'-led', NAME+'-full-after'):
+        assert not (ROOT/'hardware-tests'/name).exists()
+        scp(['DEVICE_HOST:'+REMOTE+'/'+name], ROOT/'hardware-tests')
+    before=ROOT/'hardware-tests'/(NAME+'-full-before')
+    after=ROOT/'hardware-tests'/(NAME+'-full-after')
+    image=(ROOT/'prepared/test-14-pre-async-green-boot-adb-only.img').read_bytes()
+    padded=image+b'\0'*(-len(image)%512)
+    for phase,d in [('before',before),('after',after)]:
+        a=json.loads((d/'audit.json').read_text());assert a['phase']=='complete' and a['all_verified']
+        for name,expected in [('boot',spec['expected_full_boot_'+phase+'_sha256']),('recovery',spec['expected_full_recovery_sha256']),('misc',spec['expected_misc_sha256']),('gpt','7f1e4fd44e69e004189f0256ce6d35addfb1e3dbfe1cd55bfd2047b580b1e891')]:
+            assert SHA((d/(name+'.bin')).read_bytes())==expected,(phase,name)
+    assert (after/'boot.bin').read_bytes()==padded+(before/'boot.bin').read_bytes()[len(padded):]
+    assert (ROOT/'hardware-tests'/(NAME+'-led')/'boot-readback.bin').read_bytes()==padded
+    receipt=after/'local-readback-verification.json'
+    receipt.write_text(json.dumps(dict(full_readback_verified_on_both_macs=True,
+        full_boot_sha256=spec['expected_full_boot_after_sha256'],recovery_unchanged=True,misc_unchanged=True),indent=2)+'\n')
+    scp([receipt], 'DEVICE_HOST:'+REMOTE+'/'+NAME+'-full-after/')
+    state(status='test14_full_readbacks_verified_both_macs', test14_full_boot_sha256=spec['expected_full_boot_after_sha256'])
+    print('Full before/after partitions, exact boot prefix and preserved tail verified on both Macs.')
+elif stage == 'reset':
+    assert json.loads((ROOT/'session.json').read_text())['status']=='test14_full_readbacks_verified_both_macs'
+    state(status='test14_reset_attempt_started')
+    ssh(f'{PY} {REMOTE}/reset_test14.py', 70)
+    scp(['DEVICE_HOST:'+REMOTE+'/'+NAME+'-reset'], ROOT/'hardware-tests')
+    state(status='test14_reset_awaiting_owner_checkpoint_result', programmer_loaded=False,
+          next=['Record Test14 LED/screen result; do not repeat reset.',
+                'Final green after off supports kernel_init_freeable return before async wait. Capture logs if adb appears; temporary Test13 safeguards remain.'],
+          pending_physical_step=None)
+else:
+    raise ValueError('Unknown stage')

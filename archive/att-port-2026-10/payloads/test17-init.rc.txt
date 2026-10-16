@@ -1,0 +1,16 @@
+# Test17 private diagnostics. Starts are inserted into the main on-init action.
+# Both services use the same SELinux domain as the published recovery service.
+service axon_diag_collect /sbin/sh /sbin/axon-diag-collect.sh
+    disabled
+    oneshot
+    user root
+    group root
+    seclabel u:r:recovery:s0
+
+service axon_diag_persist /sbin/sh /sbin/axon-diag-persist.sh
+    disabled
+    oneshot
+    user root
+    group root
+    seclabel u:r:recovery:s0
+

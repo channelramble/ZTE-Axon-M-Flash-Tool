@@ -1,0 +1,252 @@
+#!/usr/bin/env python3
+"""Bounded read-only Test23 USB/boot capture, with at least 180 seconds of samples.
+
+Default validates local inputs only. --execute reads the phone; it never requests
+root, changes services/settings, mounts, signals, resets, or writes device files.
+The unchanged Test22 logger/Android identity is intentional in Test23.
+"""
+from pathlib import Path
+import argparse
+import hashlib
+import json
+import os
+import re
+import time
+
+TRANSPORT_SHA = '9c89fc1ea65e3040cff4ee16758b20b3733c6ec2df2950b73e39700776b57254'
+TRANSPORT_PATH = Path(__file__).resolve().parent / 'capture_test22_adb.py'
+if hashlib.sha256(TRANSPORT_PATH.read_bytes()).hexdigest() != TRANSPORT_SHA:
+    raise ValueError('Reviewed capture transport source changed')
+
+from capture_test22_adb import (ADB, PORT, ROOT, Capture, bounded_process,
+    identity_command, verify_identity, property_command, save_state, sha,
+    write_text_capture)
+
+WHOLE_SECONDS = 480
+OBSERVATION_COUNT = 7
+OBSERVATION_GAP_SECONDS = 30
+MIN_OBSERVATION_SPAN_SECONDS = 180
+PATCHES = {
+    '/vendor/etc/init/android.hardware.usb@1.0-service.rc':
+        '77b3cb1253f3c113cc783d298a1e2dd603f14bc56fbe280f8f7b51aa1de37c9f',
+    '/vendor/bin/hw/android.hardware.usb@1.0-service':
+        '6ef50f071c02fa5e13dd3541cce9c276186f600ea6abb8d18ae00ba7e587968d',
+    '/system/bin/gatekeeperd':
+        '6ad0a440825550c3f5ec504bf438cabcbbb987cf581f088cb939d52164deb5f6',
+    '/system/lib64/libmeminfo.so':
+        '040e0c8f97434b8d101914901f55b346c4b27eee8dc82b43f2a766258245a028',
+    '/vendor/etc/init/android.hardware.gatekeeper@1.0-service.rc':
+        '172a6f91ce32c0b8cb00e29802d0a50832e01c7813d1accc0c617296fd6ef057',
+}
+PROPS = ('sys.boot_completed', 'dev.bootcomplete', 'service.bootanim.exit',
+         'init.svc.bootanim', 'init.svc.zygote', 'init.svc.zygote_secondary',
+         'init.svc.surfaceflinger', 'init.svc.gatekeeperd',
+         'init.svc.vendor.gatekeeper-1-0', 'init.svc.vendor.usb-hal-1-0',
+         'init.svc.keystore2', 'sys.usb.config', 'sys.usb.state', 'init.svc.adbd',
+         'init.svc.axon-diag-test22', 'init.svc.axon-save-test22')
+USB_FIELDS = ('usb_mode', 'udc_state', 'udc_current_speed', 'gadget_udc')
+CRASH = '/system/bin/logcat -b crash -d -t 400'
+FRAMEWORK = (
+    '/system/bin/logcat -b main -b system -d -t 1600 '
+    'SystemServer:I SystemServiceManager:I ActivityManager:I ActivityTaskManager:I '
+    'WindowManager:I BootAnimation:I AndroidRuntime:E libc:F DEBUG:F '
+    "Watchdog:I AppProfiler:I UsbService:I UsbPortManager:I UsbPortHidl:I '*:S'")
+EVENTS = (
+    '/system/bin/logcat -b events -d -t 1200 '
+    'watchdog:I system_server_start:I boot_progress_start:I boot_progress_system_run:I '
+    'boot_progress_ams_ready:I boot_progress_enable_screen:I wm_boot_animation_done:I '
+    "am_crash:I am_anr:I '*:S'")
+USER_BOOT_FOREGROUND = (
+    'set -e; set -o pipefail; '
+    "printf 'USER_STATE\n'; "
+    "/system/bin/dumpsys user | /system/bin/awk "
+    "'/^[[:space:]]*(State:|Start time:|Unlock time:|Started users state:)/'; "
+    "printf 'STORAGE_UNLOCK_STATE\n'; "
+    "/system/bin/dumpsys mount | /system/bin/awk "
+    "'/^(CE unlocked users:|System unlocked users:)/'; "
+    "printf 'FOREGROUND\n'; "
+    "/system/bin/dumpsys activity activities | /system/bin/awk "
+    "'/topResumedActivity=|Resumed:|ResumedActivity:|mResumedActivity:|mCurrentFocus=|mFocusedApp=/'; "
+    "printf 'FRAMEWORK_BOOT_STATE\n'; "
+    "/system/bin/dumpsys activity processes | /system/bin/awk "
+    "'/mProcessesReady=|mSystemReady=|mBooted=|mBooting=|mCallFinishBooting=|mBootAnimationComplete=/'")
+
+
+def patch_command():
+    return '/system/bin/sha256sum ' + ' '.join(PATCHES)
+
+
+def verify_patches(body, metadata):
+    if metadata.get('status') != 'ok':
+        return False
+    try:
+        rows = [line.split() for line in body.decode('ascii').splitlines()]
+    except UnicodeError:
+        return False
+    if len(rows) != len(PATCHES) or any(len(row) != 2 for row in rows):
+        return False
+    found = {row[1]: row[0] for row in rows}
+    return len(found) == len(rows) and found == PATCHES
+
+
+def observation_command():
+    return (
+        "printf 'uptime='; /system/bin/cat /proc/uptime; "
+        "p=$(/system/bin/pidof system_server 2>/dev/null || true); "
+        "printf 'system_server_pid=%s\n' \"$p\"; "
+        "case \"$p\" in ''|*[!0-9]*) ;; *) "
+        "printf 'system_server_stat='; /system/bin/cat /proc/$p/stat 2>/dev/null || true; "
+        "printf '\n' ;; esac; "
+        + property_command(PROPS) + '; '
+        '/system/bin/service check android.service.gatekeeper.IGateKeeperService; '
+        "printf 'usb_mode=%s\n' \"$(/system/bin/cat /sys/devices/soc/6a00000.ssusb/mode 2>/dev/null)\"; "
+        "printf 'udc_state=%s\n' \"$(/system/bin/cat /sys/class/udc/6a00000.dwc3/state 2>/dev/null)\"; "
+        "printf 'udc_current_speed=%s\n' \"$(/system/bin/cat /sys/class/udc/6a00000.dwc3/current_speed 2>/dev/null)\"; "
+        "printf 'gadget_udc=%s\n' \"$(/system/bin/cat /config/usb_gadget/g1/UDC 2>/dev/null)\"")
+
+
+def parse_observation(body):
+    text = body.decode('utf-8', 'replace')
+    values = {}
+    for line in text.splitlines():
+        if '=' in line:
+            name, value = line.split('=', 1)
+            if name in PROPS or name in USB_FIELDS or name in ('uptime', 'system_server_pid', 'system_server_stat'):
+                values[name] = value
+    pid = values.get('system_server_pid', '')
+    stat = values.get('system_server_stat', '')
+    match = re.fullmatch(r'(\d+) \(system_server\) (.+)', stat)
+    # Fields after comm begin with state (field3); starttime is field22.
+    starttime = None
+    if re.fullmatch(r'[1-9][0-9]*', pid) and match and match[1] == pid:
+        fields = match[2].split()
+        if len(fields) >= 20 and fields[19].isdigit():
+            starttime = fields[19]
+    return {'pid': int(pid) if re.fullmatch(r'[1-9][0-9]*', pid) else None,
+            'starttime_ticks': starttime,
+            'properties': {name: values.get(name) for name in PROPS},
+            'usb': {name: values.get(name) for name in USB_FIELDS},
+            'gatekeeper_binder_found': bool(re.search(
+                r'^Service android\.service\.gatekeeper\.IGateKeeperService: found\s*$',
+                text, re.MULTILINE))}
+
+
+def summarize(observations):
+    span = observations[-1]['elapsed_seconds'] - observations[0]['elapsed_seconds']
+    window = len(observations) == OBSERVATION_COUNT and span >= MIN_OBSERVATION_SPAN_SECONDS
+    signatures = {(o['pid'], o['starttime_ticks']) for o in observations}
+    valid = all(o['status'] == 'ok' and o['pid'] is not None
+                and o['starttime_ticks'] is not None for o in observations)
+    return {
+        'observation_span_seconds': round(span, 3), 'observation_window_complete': window,
+        'system_server_same_pid_and_starttime_all_samples': window and valid and len(signatures) == 1,
+        'gatekeeper_binder_found_all_samples': all(o['gatekeeper_binder_found'] for o in observations),
+        'usb_hal_running_all_samples': all(o['properties']['init.svc.vendor.usb-hal-1-0'] == 'running' for o in observations),
+        'usb_adb_peripheral_configured_all_samples': all(
+            o['properties']['sys.usb.config'] == 'adb' and o['properties']['sys.usb.state'] == 'adb'
+            and o['usb']['usb_mode'] == 'peripheral' and o['usb']['udc_state'] == 'configured'
+            and o['usb']['gadget_udc'] == '6a00000.dwc3' for o in observations),
+        'last_boot_completed': observations[-1]['properties']['sys.boot_completed'],
+    }
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--output-dir', type=Path, default=ROOT / 'test23-android-supplement-v1')
+    parser.add_argument('--execute', action='store_true')
+    args = parser.parse_args()
+    if not args.execute:
+        print(json.dumps({'files_only_validated': True, 'phone_operations': False,
+                          'transport_sha256': TRANSPORT_SHA, 'observations': OBSERVATION_COUNT,
+                          'minimum_span_seconds': MIN_OBSERVATION_SPAN_SECONDS,
+                          'logger_identity': 'test22 unchanged', 'exact_payload_hashes': PATCHES}))
+        return 0
+    os.umask(0o077)
+    out = args.output_dir
+    out.mkdir(mode=0o700, parents=True, exist_ok=False)
+    state = {'captured': False, 'finished': False, 'read_only': True, 'files': {}, 'observations': [],
+             'whole_timeout_seconds': WHOLE_SECONDS, 'expected_observations': OBSERVATION_COUNT,
+             'minimum_observation_span_seconds': MIN_OBSERVATION_SPAN_SECONDS,
+             'transport_sha256': TRANSPORT_SHA,
+             'logging_runtime_names': 'test22 unchanged; this capture uses only fresh live evidence',
+             'no_device_writes_resets_root_requests_mounts_or_settings': True}
+    save_state(out, state)
+    deadline = time.monotonic() + WHOLE_SECONDS
+    raw, rc, status = bounded_process([str(ADB), '-P', PORT, 'devices'], 10, 65536)
+    rows = [line.split() for line in raw.decode('utf-8', 'replace').splitlines()
+            if '\t' in line and len(line.split()) >= 2]
+    state['adb_states'] = [row[1] for row in rows]
+    if status != 'ok' or rc != 0 or len(rows) != 1 or rows[0][1] != 'device':
+        state['refused'] = 'Require exactly one full Android adb device'
+        save_state(out, state)
+        return 2
+    capture = Capture(rows[0][0], deadline)
+    identity, info = capture.remote(identity_command(), 4096, 10)
+    if not verify_identity(identity, info):
+        state['refused'] = 'Exact unchanged Test22 base Android identity/root guard failed'
+        state['identity_status'] = info
+        save_state(out, state)
+        return 3
+    (out / 'identity.txt').write_bytes(identity)
+    state['files']['identity.txt'] = {'status': 'ok', 'bytes': len(identity), 'sha256': sha(identity)}
+    patches, info = capture.remote(patch_command(), 4096, 10)
+    (out / 'patch-hashes.txt').write_bytes(patches)
+    state['files']['patch-hashes.txt'] = dict(info, sha256=sha(patches), bytes=len(patches))
+    if not verify_patches(patches, info):
+        state['refused'] = 'Exact Test23 USB service/native and retained Test22 patch guard failed'
+        save_state(out, state)
+        return 4
+    state.update(captured=True, full_android_identity_verified=True, patch_hashes_verified=True)
+    save_state(out, state)
+    began = time.monotonic()
+    try:
+        for index in range(OBSERVATION_COUNT):
+            if index:
+                if time.monotonic() + OBSERVATION_GAP_SECONDS >= deadline - 15:
+                    raise TimeoutError('Insufficient observation budget')
+                time.sleep(OBSERVATION_GAP_SECONDS)
+            name = 'observation-%02d.txt' % index
+            body, info = capture.remote(observation_command(), 16384, 15)
+            (out / name).write_bytes(body)
+            state['files'][name] = dict(info, sha256=sha(body), bytes=len(body))
+            observation = parse_observation(body)
+            observation.update(elapsed_seconds=time.monotonic() - began, status=info['status'])
+            state['observations'].append(observation)
+            save_state(out, state)
+            print(json.dumps({'observation': index, 'status': info['status'],
+                              'system_server_present': observation['pid'] is not None,
+                              'boot_completed': observation['properties']['sys.boot_completed']}), flush=True)
+            if index in (0, OBSERVATION_COUNT - 1):
+                suffix = 'before' if index == 0 else 'after'
+                write_text_capture(capture, out, state, 'crash-' + suffix + '.txt', CRASH, 524288, 10)
+                write_text_capture(capture, out, state, 'framework-' + suffix + '.txt', FRAMEWORK, 524288, 10)
+                write_text_capture(capture, out, state, 'events-' + suffix + '.txt', EVENTS, 262144, 10)
+                write_text_capture(capture, out, state, 'user-boot-foreground-' + suffix + '.txt', USER_BOOT_FOREGROUND, 65536, 20)
+        state.update(summarize(state['observations']))
+        patches, info = capture.remote(patch_command(), 4096, 10)
+        (out / 'patch-hashes-after.txt').write_bytes(patches)
+        state['files']['patch-hashes-after.txt'] = dict(info, sha256=sha(patches), bytes=len(patches))
+        state['final_payload_hashes_verified'] = verify_patches(patches, info)
+        state['finished'] = True
+        state['all_commands_ok'] = all(row['status'] == 'ok' for row in state['files'].values())
+        state['transaction_deadline_reached'] = time.monotonic() >= deadline
+        state['capture_complete'] = (state['all_commands_ok'] and state['observation_window_complete']
+                                     and state['final_payload_hashes_verified']
+                                     and not state['transaction_deadline_reached'])
+        save_state(out, state)
+        print(json.dumps({'finished': True, 'capture_complete': state['capture_complete'],
+                          'all_commands_ok': state['all_commands_ok'],
+                          'observation_span_seconds': state['observation_span_seconds'],
+                          'system_server_stable_at_samples': state['system_server_same_pid_and_starttime_all_samples'],
+                          'usb_hal_running_at_samples': state['usb_hal_running_all_samples'],
+                          'usb_adb_peripheral_configured_at_samples': state['usb_adb_peripheral_configured_all_samples'],
+                          'boot_completed': state['last_boot_completed']}), flush=True)
+        return 0 if state['capture_complete'] else 5
+    except BaseException as exc:
+        state['error'] = type(exc).__name__ + ': ' + str(exc)
+        save_state(out, state)
+        raise
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())

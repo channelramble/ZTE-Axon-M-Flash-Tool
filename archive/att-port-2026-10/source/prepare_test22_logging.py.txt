@@ -1,0 +1,148 @@
+#!/usr/bin/env python3
+"""Prepare four same-size logger deltas from exact Test20 system files.
+
+The early collector remains early. Start the persister first in post-fs, after
+the existing fs/mount_all action has returned. Never assemble or write an image.
+"""
+from pathlib import Path
+import hashlib
+import json
+import os
+import subprocess
+
+ROOT = Path(__file__).resolve().parent
+IMAGE = ROOT / 'test20-system-v1/system.img'
+OUT = ROOT / 'test22-logging-payloads'
+PINS = {
+    '/system/etc/init/hw/init.rc':
+        ('2bb5305bc450c032e84a0afb2c28e34801627fdf7a3b9965967d63925ae1f819', 59871),
+    '/system/etc/axon-diag-test20-collect.sh':
+        ('00f32d09dd3e2a9629c68fd22e3c1db145ee828a1771135e4a27cc3ff6d41560', 6985),
+    '/system/etc/axon-diag-test20-persist.sh':
+        ('b64797ddae3688a1a6fc25a26996b1593ba184128f8e5fae903dd6acd76b262e', 3445),
+    '/system/etc/init/axon-diag-test20.rc':
+        ('dc39d3f3df26d3245f526a173bd7d1721fe2b5cb177ced8788c2b8164e634b75', 438),
+}
+
+
+def sha(data):
+    return hashlib.sha256(data).hexdigest()
+
+
+def require(ok, message):
+    if not ok:
+        raise ValueError(message)
+
+
+def once(data, old, new):
+    require(data.count(old) == 1, 'replacement context not unique')
+    return data.replace(old, new)
+
+
+def action_owner(data, command):
+    action = None
+    found = []
+    for line in data.decode().splitlines():
+        if line and not line[0].isspace() and not line.startswith('#'):
+            action = line
+        if line == command:
+            found.append(action)
+    return found
+
+
+def transform_files(original):
+    require(set(original) == set(PINS), 'wrong source paths')
+    for path, (digest, size) in PINS.items():
+        require(sha(original[path]) == digest and len(original[path]) == size,
+                'unexpected source: ' + path)
+    changed = {p: d.replace(b'Test20', b'Test22').replace(b'test20', b'test22')
+               for p, d in original.items()}
+    main = '/system/etc/init/hw/init.rc'
+    renamed = changed[main]
+    save = b'    start axon-save-test22\n'
+    changed[main] = once(renamed,
+        b'    perform_apex_config\n    start axon-diag-test22\n' + save,
+        b'    perform_apex_config\n    start axon-diag-test22\n')
+    changed[main] = once(changed[main], b'on post-fs\n', b'on post-fs\n' + save)
+    require(changed[main].replace(save, b'') == renamed.replace(save, b''),
+            'main init change exceeds one command move and names')
+    require(action_owner(changed[main], save.decode().rstrip('\n')) == ['on post-fs'],
+            'save does not belong only to post-fs')
+    require(action_owner(changed[main], '    start axon-diag-test22') == ['on early-init'],
+            'collector timing changed')
+    require(b'on post-fs\n' + save + b'    exec - system system -- /system/bin/vdc checkpoint markBootAttempt\n'
+            in changed[main], 'save must precede checkpoint IPC')
+    # Keep physical filesystem names/inodes; only runtime identities are new.
+    for path in ('/system/etc/axon-diag-test20-collect.sh',
+                 '/system/etc/axon-diag-test20-persist.sh',
+                 '/system/etc/init/axon-diag-test20.rc'):
+        changed[path] = changed[path].replace(b'/system/etc/axon-diag-test22-collect.sh',
+                                              b'/system/etc/axon-diag-test20-collect.sh')
+        changed[path] = changed[path].replace(b'/system/etc/axon-diag-test22-persist.sh',
+                                              b'/system/etc/axon-diag-test20-persist.sh')
+    custom = '/system/etc/init/axon-diag-test20.rc'
+    comment, rest = changed[custom].split(b'\n', 1)
+    new_comment = b'# Test22: RAM capture after bootstrap APEX; cache saving after fs.'
+    require(len(new_comment) <= len(comment), 'comment does not fit')
+    changed[custom] = new_comment.ljust(len(comment), b' ') + b'\n' + rest
+    for path, data in changed.items():
+        require(len(data) == len(original[path]), 'payload grew: ' + path)
+        require(b'__AXON_CACHE_UUID__' not in data, 'unresolved cache identity')
+    # Script semantics differ only in Test identity; SELF must keep its inode path.
+    for kind in ['collect', 'persist']:
+        path = f'/system/etc/axon-diag-test20-{kind}.sh'
+        expected = original[path].replace(b'Test20', b'Test22').replace(b'test20', b'test22')
+        expected = expected.replace(f'SELF=/system/etc/axon-diag-test22-{kind}.sh'.encode(),
+                                    f'SELF=/system/etc/axon-diag-test20-{kind}.sh'.encode())
+        require(data is not None and changed[path] == expected, 'script semantics changed')
+    return changed
+
+
+def main():
+    os.umask(0o077)
+    files = {}
+    for path in PINS:
+        result = subprocess.run(['/opt/homebrew/opt/e2fsprogs/sbin/debugfs',
+                                 '-R', 'cat ' + path, str(IMAGE)], capture_output=True, check=True)
+        files[path] = result.stdout
+    changed = transform_files(files)
+    OUT.mkdir(mode=0o700, exist_ok=False)
+    entries = []
+    for path, data in changed.items():
+        name = path.lstrip('/').replace('/', '__')
+        output = OUT / name
+        with output.open('xb') as stream:
+            stream.write(data)
+        require(output.read_bytes() == data, 'output readback failed')
+        if path.endswith('.sh'):
+            subprocess.run(['/bin/sh', '-n', str(output)], check=True)
+        entries.append({'filesystem_path': path, 'payload_file': name,
+                        'original_sha256': sha(files[path]), 'sha256': sha(data),
+                        'bytes': len(data),
+                        'changed_bytes': sum(a != b for a, b in zip(files[path], data))})
+    report = {
+        'passed': True, 'files': entries, 'phone_operations': False,
+        'image_assembled_or_modified': False, 'source': str(IMAGE),
+        'source_system_image_sha256_from_verified_manifest':
+            json.loads((ROOT / 'test20-system-v1/manifest.json').read_text())['image_sha256'],
+        'runtime_identity': 'Test22; /dev/axon-diag-test22 and /cache/axon-diag-test22',
+        'physical_file_paths': 'Retained Test20 filenames and inodes; SELF/service paths remain valid.',
+        'timing': 'Only save-start moves from early-init to the first command in main on post-fs, before vdc checkpoint IPC. Collector still immediately follows first perform_apex_config.',
+        'preserved': ['all other init command ordering', '28 bounded RAM jobs and snapshot timing',
+                      'fixed cache geometry/UUID/ext4/writable-mount checks',
+                      'exclusive new destination and file caps/hash checks',
+                      'no logger mount/format/fsck'],
+        'evidence': 'Test20 persister starts7.462s; cache fs_mgr mount completes8.563676s. Snapshot01 at7.70s lacks cache, snapshots02–04 have it.',
+        'limits': ['If fs/mount_all fails, the existing strict persister still rejects.',
+                   'Gate runs once; future remount/namespace changes are not repaired by logger.',
+                   'Next image builder must preserve original inode metadata/xattrs and verify exact input/output hashes.',
+                   'Runtime timing fix is prepared, not hardware-tested.'],
+    }
+    with (OUT / 'manifest.json').open('x') as stream:
+        json.dump(report, stream, indent=2)
+        stream.write('\n')
+    print(OUT / 'manifest.json')
+
+
+if __name__ == '__main__':
+    main()

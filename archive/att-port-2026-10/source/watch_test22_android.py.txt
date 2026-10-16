@@ -1,0 +1,13 @@
+#!/usr/bin/env python3
+from pathlib import Path
+import subprocess,json,time,usb.core
+ADB=str(Path.home()/'.local/share/axon-m-edl/platform-tools-29.0.6/adb')
+start=time.monotonic();last=None
+while time.monotonic()-start<150:
+ r=subprocess.run([ADB,'-P','5038','devices'],capture_output=True,text=True,timeout=8)
+ states=[x.split()[1] for x in r.stdout.splitlines()[1:] if len(x.split())>=2]
+ edl=len(list(usb.core.find(find_all=True,idVendor=0x05c6,idProduct=0x9008)))
+ current=(edl,tuple(states))
+ if current!=last:print(json.dumps({'elapsed':round(time.monotonic()-start,1),'edl_devices':edl,'adb_states':states}),flush=True);last=current
+ if states == ['device']:break
+ time.sleep(3)

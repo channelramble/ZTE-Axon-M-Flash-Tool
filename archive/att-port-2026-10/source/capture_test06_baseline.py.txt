@@ -1,0 +1,38 @@
+
+import subprocess,json,hashlib,time
+from pathlib import Path
+adb='/EXAMPLE/REMOTE_HOME/.local/share/axon-m-edl/platform-tools-29.0.6/adb'
+base=[adb,'-P','5038','-d']
+r=subprocess.run([adb,'-P','5038','devices'],capture_output=True,text=True,timeout=15)
+states=[x.split()[1] for x in r.stdout.splitlines()[1:] if len(x.split())>=2]
+assert states==['recovery'],states
+out=Path('/EXAMPLE/REMOTE_HOME/.local/share/axon-m-edl/sessions/SESSION_ID/test06-reader-control/live-baseline')
+out.mkdir(exist_ok=False)
+commands={
+'kernel-version.txt':'uname -a',
+'cmdline.txt':'cat /proc/cmdline',
+'dmesg.txt':'dmesg',
+'recovery.log':'cat /tmp/recovery.log',
+'boot-properties.txt':'for x in ro.twrp.version ro.product.device ro.build.version.release ro.bootmode ro.boot.mode ro.boot.bootreason ro.boot.verifiedbootstate sys.usb.config sys.usb.state; do echo "$x=$(getprop $x)"; done',
+'ramoops-layout.txt':'for f in /sys/module/ramoops/parameters/*; do echo "$f"; cat "$f"; done; ls -l /sys/fs/pstore',
+'mounts.txt':'cat /proc/mounts',
+'block-map.txt':'ls -l /dev/block/bootdevice/by-name; cat /proc/partitions',
+'leds.txt':'for d in /sys/class/leds/*; do echo "$d"; readlink -f "$d/device"; for p in brightness max_brightness trigger; do echo "$p"; cat "$d/$p" 2>/dev/null; done; done',
+'firmware-locations.txt':'for d in /system/etc/firmware /system/vendor/firmware /vendor/firmware /firmware/image; do echo "$d"; ls -l "$d"/a530_zap.* 2>/dev/null; done',
+'battery.txt':'for x in capacity status voltage_now temp; do echo "$x"; cat /sys/class/power_supply/battery/$x 2>/dev/null; done',
+'commands.txt':'for x in sha256sum head dd blockdev tar stat readlink busybox reboot; do command -v "$x"; done; ls -l /sbin/reboot /sbin/sh; cat /etc/recovery.fstab'
+}
+manifest={}
+for name,cmd in commands.items():
+ r=subprocess.run(base+['shell',cmd],capture_output=True,timeout=30)
+ (out/name).write_bytes(r.stdout)
+ (out/(name+'.stderr')).write_bytes(r.stderr)
+ manifest[name]={'bytes':len(r.stdout),'sha256':hashlib.sha256(r.stdout).hexdigest(),'exit':r.returncode}
+ print(json.dumps({'capture':name,**manifest[name]}),flush=True)
+for name,cmd in [('live-device-tree.tar','tar -C /proc/device-tree -cf - .'),('pstore.tar','tar -C /sys/fs/pstore -cf - .')]:
+ r=subprocess.run(base+['exec-out',cmd],capture_output=True,timeout=30)
+ (out/name).write_bytes(r.stdout)
+ (out/(name+'.stderr')).write_bytes(r.stderr)
+ manifest[name]={'bytes':len(r.stdout),'sha256':hashlib.sha256(r.stdout).hexdigest(),'exit':r.returncode}
+ print(json.dumps({'capture':name,**manifest[name]}),flush=True)
+(out/'manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')

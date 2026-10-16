@@ -1,0 +1,11 @@
+/* Diagnostic milestone: init freeable work returned, original async wait follows. */
+.text
+.globl pre_async_marker
+pre_async_marker:
+    stp x29, x30, [sp, #-16]!
+    mov x29, sp
+    mov w0, #255
+    bl green_sync
+    bl async_synchronize_full
+    ldp x29, x30, [sp], #16
+    ret

@@ -1,0 +1,13 @@
+from pathlib import Path
+import json,signal
+from firehose_read import Reader
+from firehose_boot_test import save_state
+out=Path(__file__).resolve().parent/'test22-edl-before'
+def deadline(*args):raise TimeoutError('System read deadline no reset')
+signal.signal(signal.SIGALRM,deadline);signal.alarm(1200)
+with (out/'system-read.xml.log').open('xb') as log:
+ c=Reader(log)
+ try:
+  c.configure(); result=c.read(1312768,13631488,out/'system.bin')
+  state=json.loads((out/'audit.json').read_text());state['files']['system']=result;save_state(out/'audit.json',state)
+ finally:c.close()

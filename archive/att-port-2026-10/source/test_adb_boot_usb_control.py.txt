@@ -1,0 +1,237 @@
+#!/usr/bin/env python3
+"""Focused offline boot-writer tests; no adb, SSH, USB or phone operations."""
+import contextlib
+import io
+import json
+from pathlib import Path
+import tempfile
+import time
+import unittest
+from unittest.mock import Mock, patch
+
+import adb_boot_usb_control as writer
+from fujisan_image import BootImage, sign_image
+
+ROOT = Path(__file__).resolve().parent
+
+
+class FakeBoot:
+    def __init__(self, current_boot, recovery, gpt, fault=None):
+        self.contents = {'boot': current_boot, 'recovery': recovery, 'gpt': gpt,
+                         'misc': b'\0' * 1048576}
+        self.fault = fault
+        self.serial = 'PRIVATE_BOOT_FIXTURE'
+        self.writes = 0
+        self.geometry_calls = 0
+
+    def identity(self):
+        return {'kernel_release': '3.18.71-offline', 'twrp_version': '3.2.3-0'}
+
+    def geometry(self):
+        self.geometry_calls += 1
+        if self.fault == 'late-geometry' and self.geometry_calls == 2:
+            raise ValueError('Geometry changed before write')
+        return {'boot_node': '/dev/block/mmcblk0p18'}
+
+    def make_workspace(self):
+        return '/tmp/OFFLINE'
+
+    def capture(self, kind, path):
+        data = self.contents[kind]
+        if path.name == 'boot-after.bin':
+            data = self.staged + data[len(self.staged):]
+        if self.fault == path.stem:
+            data = data[:-1] + bytes([data[-1] ^ 1])
+        path.write_bytes(data)
+
+    def stage(self, path, expected_hash, expected_bytes):
+        self.staged = path.read_bytes()
+        assert len(self.staged) == expected_bytes and writer.digest(self.staged) == expected_hash
+        if self.fault == 'stage':
+            raise ValueError('Stage does not verify')
+
+    def arm(self, length):
+        assert length == len(self.staged)
+
+    def write_boot(self):
+        self.writes += 1
+        if self.fault == 'write':
+            raise TimeoutError('Write state uncertain PRIVATE_BOOT_FIXTURE')
+
+
+class BootUSBWriterTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.fixture = tempfile.TemporaryDirectory(prefix='axon-boot-usb-fixture-')
+        directory = Path(cls.fixture.name)
+        # A signed, ramdisk-only fixture for writer validation, never a device candidate.
+        payload = BootImage((ROOT / 'prepared/reader-3.2.3-recovery-control.img').read_bytes()).payload
+        cls.image = sign_image(payload, '/boot', str(ROOT / 'keys/axon-m-local.key'),
+                               str(ROOT / 'keys/axon-m-local.pem'))
+        candidate = directory / 'OFFLINE-FIXTURE-NEVER-FLASH.img'
+        candidate.write_bytes(cls.image)
+        cls.plan = {
+            'partition': 'boot', 'image': str(candidate), 'image_sha256': writer.digest(cls.image),
+            'backups': str(ROOT / 'backups/SESSION_ID'),
+            'source_boot': str(ROOT / 'prepared/reader-3.2.3-boot.img'),
+            'previous_boot': str(ROOT / 'prepared/test-05-qce-disabled-boot.img'),
+            'current_recovery': str(ROOT / 'hardware-tests/reader-recovery-control/recovery-after.bin'),
+            'output': str(directory / 'unused'),
+        }
+        path = directory / 'plan.json'
+        path.write_text(json.dumps(cls.plan))
+        cls.values = writer.load_plan(path)
+        cls.padded, cls.gpt, cls.current, cls.recovery = cls.values[2:]
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.fixture.cleanup()
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix='axon-boot-usb-test-')
+        self.directory = Path(self.temp.name)
+
+    def tearDown(self):
+        self.temp.cleanup()
+
+    def plan_file(self, **updates):
+        path = self.directory / 'plan.json'
+        path.write_text(json.dumps(dict(self.plan, **updates)))
+        return path
+
+    def run_fake(self, fault=None):
+        plan = dict(self.values[0], output=str(self.directory / ('run-' + str(fault))))
+        fake = FakeBoot(self.current, self.recovery, self.gpt, fault)
+        values = (plan, *self.values[1:])
+        with patch.object(writer.base.subprocess, 'Popen', side_effect=AssertionError('No real transport')):
+            if fault:
+                with self.assertRaises(RuntimeError) as error:
+                    writer.execute(*values, client_factory=lambda *args: fake)
+                state = json.loads((Path(plan['output']) / 'transaction.json').read_text())
+                self.assertNotIn(fake.serial, str(error.exception))
+            else:
+                state = writer.execute(*values, client_factory=lambda *args: fake)
+        return plan, fake, state
+
+    def test_full_current_boot_reconstruction_has_all_three_regions(self):
+        self.assertEqual(len(self.current), writer.PARTITION_BYTES)
+        self.assertEqual(writer.digest(self.current), writer.CURRENT_BOOT_SHA)
+        source = Path(self.plan['source_boot']).read_bytes()
+        previous = Path(self.plan['previous_boot']).read_bytes()
+        source_padded = source + b'\0' * (-len(source) % 512)
+        previous_padded = previous + b'\0' * (-len(previous) % 512)
+        original = (Path(self.plan['backups']) / 'boot.bin').read_bytes()
+        self.assertEqual(self.current[:len(source_padded)], source_padded)
+        self.assertEqual(self.current[len(source_padded):len(previous_padded)], previous_padded[len(source_padded):])
+        self.assertEqual(self.current[len(previous_padded):], original[len(previous_padded):])
+        self.assertEqual(writer.digest(self.recovery), writer.CURRENT_RECOVERY_SHA)
+
+    def test_current_state_and_target_pins_cannot_be_redirected(self):
+        cases = ({'partition': 'recovery'}, {'source_boot': self.plan['previous_boot']},
+                 {'previous_boot': self.plan['source_boot']},
+                 {'current_recovery': str(Path(self.plan['backups']) / 'recovery.bin')},
+                 {'image_sha256': '0' * 64})
+        for update in cases:
+            with self.subTest(update=update), self.assertRaises(ValueError):
+                writer.load_plan(self.plan_file(**update))
+
+    def test_candidate_requires_boot_signature_and_ramdisk_only_change(self):
+        recovery_image = ROOT / 'prepared/reader-3.2.3-recovery-control.img'
+        with self.assertRaisesRegex(ValueError, '/boot-signed'):
+            writer.load_plan(self.plan_file(image=str(recovery_image), image_sha256=writer.digest(recovery_image.read_bytes())))
+        boot = BootImage(self.image)
+        altered = sign_image(boot.rebuild(cmdline=boot.cmdline + ' changed=1'), '/boot',
+                             str(ROOT / 'keys/axon-m-local.key'), str(ROOT / 'keys/axon-m-local.pem'))
+        path = self.directory / 'changed-cmdline.img'
+        path.write_bytes(altered)
+        with self.assertRaisesRegex(ValueError, 'Only the ramdisk'):
+            writer.load_plan(self.plan_file(image=str(path), image_sha256=writer.digest(altered)))
+        with self.assertRaisesRegex(ValueError, 'intended ramdisk'):
+            writer.load_plan(self.plan_file(image=self.plan['source_boot'], image_sha256=writer.SOURCE_SHA))
+
+    def test_default_preflight_never_executes_or_creates_output(self):
+        output = self.directory / 'no-output'
+        with patch.object(writer, 'execute', side_effect=AssertionError('Unexpected device access')):
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(writer.main([str(self.plan_file(output=str(output)))]), 0)
+        self.assertFalse(output.exists())
+
+    def test_fixed_boot_write_is_one_shot_and_recovery_method_is_disabled(self):
+        client = writer.AdbBootUSB('/unused/adb', self.directory, time.monotonic() + 60)
+        client.workspace = '/tmp/OFFLINE'
+        client.stage_path = '/tmp/OFFLINE/candidate-padded.bin'
+        client.verified_stage_length = 512
+        client.shell = Mock()
+        with self.assertRaises(RuntimeError):
+            client.write_boot()
+        with self.assertRaises(RuntimeError):
+            client.write_recovery()
+        client.arm(512)
+        client.write_boot()
+        self.assertEqual(client.shell.call_args.args, (
+            'dd if=/tmp/OFFLINE/candidate-padded.bin of=/dev/block/mmcblk0p18 bs=512 count=1 conv=notrunc\nsync',
+            'WRITE-boot-only'))
+        with self.assertRaises(RuntimeError):
+            client.write_boot()
+        with self.assertRaises(ValueError):
+            client.arm(512)
+        self.assertEqual(client.shell.call_count, 1)
+
+    def test_boot_capture_reads_full_partition_not_only_image_prefix(self):
+        client = writer.AdbBootUSB('/unused/adb', self.directory, time.monotonic() + 60)
+        client.workspace = '/tmp/OFFLINE'
+        client.shell = Mock(return_value=str(writer.PARTITION_BYTES))
+        def fake_pull(args, label):
+            self.assertEqual(args[:2], ['pull', '/tmp/OFFLINE/boot-before.bin'])
+            Path(args[2]).write_bytes(self.current)
+        client._run = fake_pull
+        path = self.directory / 'boot-before.bin'
+        client.capture('boot', path)
+        self.assertIn('if=/dev/block/mmcblk0p18', client.shell.call_args.args[0])
+        self.assertIn('bs=512 count=131072', client.shell.call_args.args[0])
+        self.assertEqual(writer.file_hash(path), writer.CURRENT_BOOT_SHA)
+
+    def test_success_checks_full_tail_recovery_misc_and_never_resets(self):
+        plan, fake, state = self.run_fake()
+        self.assertEqual(fake.writes, 1)
+        self.assertEqual(fake.geometry_calls, 2)
+        for flag in ('readback_verified', 'write_started', 'write_completed',
+                     'boot_tail_unchanged', 'misc_unchanged', 'recovery_unchanged'):
+            self.assertTrue(state[flag])
+        self.assertEqual(state['phase'], 'complete')
+        self.assertFalse(state['reset_sent'])
+        before = (Path(plan['output']) / 'boot-before.bin').read_bytes()
+        after = (Path(plan['output']) / 'boot-after.bin').read_bytes()
+        self.assertEqual(after, self.padded + before[len(self.padded):])
+        self.assertEqual(len(after), 67108864)
+
+    def test_all_live_preflight_mismatches_block_the_write(self):
+        for fault in ('gpt-before', 'boot-before', 'recovery-before', 'misc-before', 'stage', 'late-geometry'):
+            with self.subTest(fault=fault):
+                plan, fake, state = self.run_fake(fault)
+                self.assertEqual(fake.writes, 0)
+                self.assertFalse(state['write_started'])
+                self.assertFalse(state['readback_verified'])
+                self.assertFalse(state['reset_sent'])
+
+    def test_tail_or_other_partition_corruption_fails_without_retry(self):
+        for fault in ('boot-after', 'recovery-after', 'misc-after', 'write'):
+            with self.subTest(fault=fault):
+                plan, fake, state = self.run_fake(fault)
+                self.assertEqual(fake.writes, 1)
+                self.assertEqual(state['write_completed'], fault != 'write')
+                self.assertFalse(state['readback_verified'])
+                self.assertFalse(state['reset_sent'])
+                self.assertEqual(state['phase'], 'error')
+                self.assertNotIn(fake.serial, json.dumps(state))
+
+    def test_existing_output_refused_before_transport(self):
+        plan = dict(self.values[0], output=str(self.directory))
+        factory = Mock(side_effect=AssertionError('Unexpected transport'))
+        with self.assertRaises(FileExistsError):
+            writer.execute(plan, *self.values[1:], client_factory=factory)
+        factory.assert_not_called()
+
+
+if __name__ == '__main__':
+    unittest.main(verbosity=2)

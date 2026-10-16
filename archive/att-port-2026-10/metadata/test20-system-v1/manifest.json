@@ -1,0 +1,291 @@
+{
+  "passed": true,
+  "source_sha256": "0271379d1402dc727b1c5f4a48333cf3db1f799d86370c19b5cafdecb4846f27",
+  "image_sha256": "7c32f735219768f31444400c67cf996b5f80de4c17d0d1c1ed65a7d0acf0883a",
+  "bytes": 6979321856,
+  "payload_manifest_pins": {
+    "prepared/los23-full-security-v1/manifest.json": "8db8de41dee7a2acd784c1369631cc04718f71ebe8a2f0ee95bdfd48059ef865",
+    "los23-full-usb-payloads/manifest.json": "de9375170d86d5746723f18bda2b5100df1a25eb2023ffb95d5cff7da720c5c9",
+    "test20-logging-payloads/manifest.json": "4dc97b7c3be3f9cbc6f663be26ea0cc8249728fa270ad8acb514781042e34fa1"
+  },
+  "existing_files": [
+    {
+      "path": "/system/bin/init",
+      "source_sha": "b77252effaacb128093e75832fc906ea2c8aa2e2b6558f501c689054035e2b1e",
+      "output_sha": "31bfd4ad1cdd17986110499be2a7e60748dbc5f8c3df4a0c692c3f3a2bfc4a18",
+      "bytes": 2716600,
+      "changed_bytes": 2,
+      "changed_data_blocks": [
+        122610
+      ],
+      "original_stat_sha256": "7a457587b91c01adcf635b68176e12b1bd2fe6d6343fe018777277c076f7a598"
+    },
+    {
+      "path": "/system/build.prop",
+      "source_sha": "e73527a5b46b08f4ddd6d67d64b6f9e12312061b38fcd7950d8d93dbde0ae479",
+      "output_sha": "669e957ef4423ce78ba77f961d5f2aee8dce1fdeb658e89763bb3ad773b9fb98",
+      "bytes": 9997,
+      "changed_bytes": 3,
+      "changed_data_blocks": [
+        131024
+      ],
+      "original_stat_sha256": "94ac4503bffd2c641d4db18b63c84bcf1beb4f4e079842e9d8a3601fe0b0a6e6"
+    },
+    {
+      "path": "/system_ext/etc/build.prop",
+      "source_sha": "f4635ce5923d6552fcf2ca24bac4ab553bf6562ba64bb8a67b44564e0a4ffbec",
+      "output_sha": "1e7e7903d60f2587dd8d81741af8c5190c91e4b172a63e5cd465ad49fae4affe",
+      "bytes": 1037,
+      "changed_bytes": 1,
+      "changed_data_blocks": [
+        429900
+      ],
+      "original_stat_sha256": "f9216a493d61eba77beeba262d1d68dab18e0c868afc55e73785ff5617420433"
+    },
+    {
+      "path": "/system/etc/init/fujisan.rc",
+      "source_sha": "1ad5ed80d0e124f1cd9770bf3a8be25a0f11cb971788f4ac22167d542f1233bb",
+      "output_sha": "cc55694b6567f665c6259fa1aa9219acfb339f7f5398937b95a526a1148ec5d5",
+      "bytes": 8053,
+      "changed_bytes": 7498,
+      "changed_data_blocks": [
+        132080,
+        132081
+      ],
+      "original_stat_sha256": "9f227edd5d90627fdb7c903bfa77275e398d46ec4c00e28a7de41dc44a65b164"
+    },
+    {
+      "path": "/system/etc/init/hw/init.rc",
+      "source_sha": "04fdc60c8d3f4f6abf231421e1464fcd61dc8e5f5b88e1a7c18c6afd03ab495e",
+      "output_sha": "2bb5305bc450c032e84a0afb2c28e34801627fdf7a3b9965967d63925ae1f819",
+      "bytes": 59871,
+      "changed_bytes": 52806,
+      "changed_data_blocks": [
+        132090,
+        132091,
+        132092,
+        132093,
+        132094,
+        132095,
+        132096,
+        132097,
+        132098,
+        132099,
+        132100,
+        132101,
+        132102,
+        132103,
+        132104
+      ],
+      "original_stat_sha256": "760f21c52e6f68ae4d5355efb240a7802b3e57a36179b3b0a1d1b698cdcb75b7"
+    },
+    {
+      "path": "/system/etc/init/hw/init.usb.configfs.rc",
+      "source_sha": "1384154db54fe5a8b3fb62f9c8e9c6732c379066c941364c25d853ac55aa994b",
+      "output_sha": "981a8ae78bf913774bf290f06d0366cd95f7ea4a4fb330e6b00f11b6979d19d2",
+      "bytes": 7690,
+      "changed_bytes": 6902,
+      "changed_data_blocks": [
+        132105,
+        132106
+      ],
+      "original_stat_sha256": "3e06cb5fbec610db2e55648a3771ed796a0e46242800002e9317d1f4a14cedd9"
+    },
+    {
+      "path": "/system/etc/init/hw/init.usb.rc",
+      "source_sha": "b42a64eab42cdb0cbdce037348696b5169e50007109d3dca32acbbcebbb6c4c5",
+      "output_sha": "c0a703ea619fc1471055d9883911c00d67baf923b92df2c243d37c10f06391e3",
+      "bytes": 5932,
+      "changed_bytes": 5029,
+      "changed_data_blocks": [
+        132107,
+        132108
+      ],
+      "original_stat_sha256": "fb3c6b32cfb529416463b409ad86e59f3fc7dfc9524449fbf0eaa80a718e2bbd"
+    },
+    {
+      "path": "/system/etc/init/usbd.rc",
+      "source_sha": "772b27f3affb6e67d1a6bc83a2b201cbdc053854789326ac9833ab84277ff995",
+      "output_sha": "22db962f0eec109d9fcf6f875680de923cf7c23757357fc582b8ca78415cd6af",
+      "bytes": 103,
+      "changed_bytes": 64,
+      "changed_data_blocks": [
+        132150
+      ],
+      "original_stat_sha256": "f11aa09f4de72aa1b87203293423e9ed033e2461dd9c641064005d6958bf81e6"
+    },
+    {
+      "path": "/vendor/etc/init/android.hardware.usb@1.0-service.rc",
+      "source_sha": "77b3cb1253f3c113cc783d298a1e2dd603f14bc56fbe280f8f7b51aa1de37c9f",
+      "output_sha": "386ee38f0e558cefe689dba87a513d311380d98906a279d2775ec0773987db92",
+      "bytes": 175,
+      "changed_bytes": 89,
+      "changed_data_blocks": [
+        540815
+      ],
+      "original_stat_sha256": "63b76c7cac57635b3c717a767b15740a044b0a53a2c08fbcb86d3dcfd7d6d8be"
+    },
+    {
+      "path": "/vendor/etc/init/hw/init.msm.usb.configfs.rc",
+      "source_sha": "448a54ba0a2984cc9d71f7cbe5d261a6128aff13a137fbe8d862edc97405d8f1",
+      "output_sha": "73fb0ede02e0a9d809ec025422a828f5aabec4249a7e1a84d8865069d2534599",
+      "bytes": 44909,
+      "changed_bytes": 42171,
+      "changed_data_blocks": [
+        540824,
+        540825,
+        540826,
+        540827,
+        540828,
+        540829,
+        540830,
+        540831,
+        540832,
+        540833,
+        540834
+      ],
+      "original_stat_sha256": "d68bcb835b98aeba4e9564a3a51bf0fd5342126137361788923d5382726d4dd1"
+    },
+    {
+      "path": "/vendor/etc/init/hw/init.qcom.rc",
+      "source_sha": "4c6a9e0d19df46c219a52a14e9dafac46deed8ce59503591afb8057d547e0fab",
+      "output_sha": "a0f2b1ed429d6dc2b867615de5ecb07545ba839130d85769de61980ecc981f39",
+      "bytes": 33455,
+      "changed_bytes": 3127,
+      "changed_data_blocks": [
+        540844,
+        540845
+      ],
+      "original_stat_sha256": "03d9338b6a6cbbf706c25d1516dc4d957f46c948791217968f5eedbd3aff0ddb"
+    },
+    {
+      "path": "/vendor/etc/init/hw/init.qcom.usb.rc",
+      "source_sha": "5ef5824cdb7731a51f5b5b972a0db3a8eeb39a0711b271381566820792c283e0",
+      "output_sha": "fe828e5f29dfbb645ecb77f2e72370495b67265cf50fdb749306bc5d7ef259e1",
+      "bytes": 94581,
+      "changed_bytes": 91049,
+      "changed_data_blocks": [
+        540846,
+        540847,
+        540848,
+        540849,
+        540850,
+        540851,
+        540852,
+        540853,
+        540854,
+        540855,
+        540856,
+        540857,
+        540858,
+        540859,
+        540860,
+        540861,
+        540862,
+        540863,
+        540864,
+        540865,
+        540866,
+        540867,
+        540868,
+        540869
+      ],
+      "original_stat_sha256": "a6262dc064eaeb762787330c3987de13111beb500855f74c3bd03942be2c2779"
+    },
+    {
+      "path": "/vendor/etc/init/hw/init.target.rc",
+      "source_sha": "ee7e2f1474740dad0bf94d86a23786502c2d238b080ab00ff184a9e93dfe9347",
+      "output_sha": "2cabd2dce5a76ea68cd1ee66efd71b530cf22cd1425b6b099d5afbc30face534",
+      "bytes": 11968,
+      "changed_bytes": 591,
+      "changed_data_blocks": [
+        540872
+      ],
+      "original_stat_sha256": "9d4589f4daf065eaeeafc497c01c1b2cfe2add48c5f7cb38ca581dc424f0902b"
+    },
+    {
+      "path": "/vendor/etc/init/hw/init.vendor.usb.rc",
+      "source_sha": "7f602bed74deb4a5734e6168cae4cdbe03b9916011f8df210ef1344a67ec5dea",
+      "output_sha": "1d87445bd417283deb73534db6f559a77e1488b284749e333c725a80a0f18da3",
+      "bytes": 39037,
+      "changed_bytes": 36547,
+      "changed_data_blocks": [
+        540876,
+        540877,
+        540878,
+        540879,
+        540880,
+        540881,
+        540882,
+        540883,
+        540884,
+        540885
+      ],
+      "original_stat_sha256": "f94a06d4eea6a1f79312bab8a8fb15c4f25d371a6e8e47517c0175e030cb1720"
+    },
+    {
+      "path": "/vendor/etc/init/zz-fujisan-charger.rc",
+      "source_sha": "210c6b08e3c9fe40987bb9243967aad697963558b164b30b228e4dad697d7aab",
+      "output_sha": "f7d638a6c32b1231f437dcc9e3a31e6ddaa7ada67d9b419b1364e174905227eb",
+      "bytes": 377,
+      "changed_bytes": 205,
+      "changed_data_blocks": [
+        540895
+      ],
+      "original_stat_sha256": "c84190ca06bea76fc8ab559b08133edbdce4f6e15a817ec24b58b26f8282d8d2"
+    },
+    {
+      "path": "/vendor/etc/fstab.qcom",
+      "source_sha": "2bdae3e1c77120b9cfab9ea6f2ead22ffade5c0b9970bf3ac524215e7f623a9a",
+      "output_sha": "054394e13e07abc4b32f700621320232447f829d67ea1846c7bfad9440086ec5",
+      "bytes": 2742,
+      "changed_bytes": 1503,
+      "changed_data_blocks": [
+        540778
+      ],
+      "original_stat_sha256": "d21e72e5775a39b9078b85ce08e27428318eaf2e584b45829bbbde025809ac68"
+    }
+  ],
+  "added_files": [
+    {
+      "path": "/system/etc/axon-diag-test20-collect.sh",
+      "source_exists": false,
+      "payload": "/EXAMPLE/WORKSPACE/.axon-m-private/test20-logging-payloads/axon-diag-test20-collect.sh",
+      "sha256": "00f32d09dd3e2a9629c68fd22e3c1db145ee828a1771135e4a27cc3ff6d41560",
+      "bytes": 6985,
+      "uid": 0,
+      "gid": 0,
+      "mode": 33188,
+      "selinux": "u:object_r:system_file:s0"
+    },
+    {
+      "path": "/system/etc/axon-diag-test20-persist.sh",
+      "source_exists": false,
+      "payload": "/EXAMPLE/WORKSPACE/.axon-m-private/test20-logging-payloads/axon-diag-test20-persist.sh",
+      "sha256": "b64797ddae3688a1a6fc25a26996b1593ba184128f8e5fae903dd6acd76b262e",
+      "bytes": 3445,
+      "uid": 0,
+      "gid": 0,
+      "mode": 33188,
+      "selinux": "u:object_r:system_file:s0"
+    },
+    {
+      "path": "/system/etc/init/axon-diag-test20.rc",
+      "source_exists": false,
+      "payload": "/EXAMPLE/WORKSPACE/.axon-m-private/test20-logging-payloads/axon-diag-test20.rc",
+      "sha256": "dc39d3f3df26d3245f526a173bd7d1721fe2b5cb177ced8788c2b8164e634b75",
+      "bytes": 438,
+      "uid": 0,
+      "gid": 0,
+      "mode": 33188,
+      "selinux": "u:object_r:system_file:s0"
+    }
+  ],
+  "existing_inode_metadata_xattrs_preserved": true,
+  "pre_addition_other_image_bytes_exact": true,
+  "additions_verified_mode_owner_selinux": true,
+  "read_only_fsck_passed": true,
+  "automatic_format_flags_removed": true,
+  "phone_operations": false,
+  "hardware_tested": false
+}

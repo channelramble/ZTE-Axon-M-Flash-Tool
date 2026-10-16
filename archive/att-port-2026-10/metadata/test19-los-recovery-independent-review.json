@@ -1,0 +1,66 @@
+{
+  "passed": true,
+  "image_sha256": "7464779eaa501e58b9b1b78b09676786c98e154de6631f82f8d2bc8a37d1ed46",
+  "image_bytes": 26625075,
+  "padded_bytes": 26625536,
+  "padded_sha256": "280b615c87daf67f871d800d9c3d400c1f3b5c3f89cc99ce700a14251f4687f7",
+  "source_sha256": "5d76032e77d24a364bfd733369470abd516c198e8217c590d286dc16ab527a5a",
+  "cpio_sha256": "be30850f2a904535803d21366e226a5ebcdd0358f1430829c7082d494f1b96d2",
+  "raw_sha256": "0c14d626fcd2ea4e35895b0db4801d3b5aaf150a62806c7a90fcb4ee9a5accaa",
+  "raw_changed_bytes": 4,
+  "original_988_initcalls_unchanged": true,
+  "no_deferred_or_cleanup_bypass_or_led_cave": true,
+  "dt_checks": [
+    {
+      "index": 0,
+      "source_sha256": "b162e958ab5015cec947c25f2ad22377ad8fc54281603627e9ad2ae0205ca6fc",
+      "target_sha256": "f20fcf4b7438eeef6dc43a5d08e0922d7f00aa18f887266e3f69cf3e4f2a4da8",
+      "semantic_scope_valid": true
+    },
+    {
+      "index": 1,
+      "source_sha256": "c674a59369cd85f4480dddd8462543cc119650e2b38ce522b6cab43368f273a5",
+      "target_sha256": "9edaf754d84f7d7d7d29dc0306dd2d19985ff0f96da6d69b305bc9c9baf7e1fd",
+      "semantic_scope_valid": true
+    }
+  ],
+  "ramdisk_changed_entries": [
+    "init.recovery.qcom.rc",
+    "prop.default",
+    "system/bin/init",
+    "system/etc/init/hw/init.rc",
+    "system/etc/recovery.fstab"
+  ],
+  "ramdisk_added_entries": [
+    "system/bin/axon-diag-collect.sh",
+    "system/bin/axon-diag-persist.sh"
+  ],
+  "other_encoded_cpio_entries_and_order_exact": true,
+  "init_changed_byte_offsets": [
+    "0xfc079",
+    "0xfc080"
+  ],
+  "init_sha256": "714ecace1ad409d588f497d51c738cf0bdb0a1d23ee3029c5b976db5f0e468eb",
+  "independent_init_adbd_toybox_review": "los-recovery-init-adbd-binary-review.json",
+  "diagnostic_only_permissive_root_usb_adb": true,
+  "native_toybox_blkid_registration_independently_verified": true,
+  "bounded_logger_and_fixed_p36_uuid_type_geometry_private_mount_guards_reviewed": true,
+  "no_automatic_data_cache_persist_dcmlog_mounts": true,
+  "charger_disabled_and_recovery_explicit_args": true,
+  "mtp_actions_absent": true,
+  "original_peripheral_and_functionfs_ready_actions_preserved": true,
+  "signature_target": "/boot",
+  "signature_verified": true,
+  "boot_id_valid": true,
+  "payload_header_load_addresses_and_second_section_preserved": true,
+  "expected_current_full_boot_sha256": "1af22309c02a580d8ffcc27dc568533de13e379ae17fec507885026b441402ff",
+  "expected_full_boot_after_sha256": "da1ca2689b3bbb16d9783c48b1ab26809184a31f8efa650dac1cadd029f1399d",
+  "expected_full_boot_tail_after_candidate_byte_exact": true,
+  "hardware_tested": false,
+  "phone_operations": false,
+  "limits": [
+    "Diagnostic skips and permissive recovery do not establish production LOS compatibility.",
+    "Runtime USB, UID, enforcement, display and cache capture require observation.",
+    "Uninterruptible kernel I/O may outlast userspace timeout; workers are bounded and not retried."
+  ]
+}

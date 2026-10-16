@@ -1,0 +1,19 @@
+# Test16 private diagnostics. Import after the published init.rc actions.
+# Both services use the same SELinux domain as the published recovery service.
+service axon_diag_collect /sbin/sh /sbin/axon-diag-collect.sh
+    disabled
+    oneshot
+    user root
+    group root
+    seclabel u:r:recovery:s0
+
+service axon_diag_persist /sbin/sh /sbin/axon-diag-persist.sh
+    disabled
+    oneshot
+    user root
+    group root
+    seclabel u:r:recovery:s0
+
+on post-fs
+    start axon_diag_collect
+    start axon_diag_persist

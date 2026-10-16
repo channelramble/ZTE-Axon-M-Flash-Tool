@@ -1,0 +1,155 @@
+"""Offline checks for the actual boot-write bounds and transfer failures."""
+import io
+import contextlib
+import json
+from pathlib import Path
+import tempfile
+import unittest
+from unittest.mock import patch
+import xml.etree.ElementTree as ET
+
+import firehose_boot_test as transaction
+from firehose_boot_test import BootWriter, BOOT_START, BOOT_SECTORS
+
+
+class Endpoint:
+    def __init__(self, short_at=None):
+        self.calls = []
+        self.short_at = short_at
+
+    def write(self, data, timeout):
+        self.calls.append(bytes(data))
+        return len(data) - 1 if len(self.calls) == self.short_at else len(data)
+
+
+def writer(short_at=None):
+    result = BootWriter.__new__(BootWriter)
+    result.log = io.BytesIO()
+    result.ep_out = Endpoint(short_at)
+    result.writes_enabled = True
+    result.chunk_size = 1024
+    result.states = []
+    result.response = lambda rawmode, timeout=15: result.states.append(rawmode)
+    return result
+
+
+class BootWriteTests(unittest.TestCase):
+    def test_exact_boot_range_bytes_and_framing(self):
+        client = writer()
+        data = bytes(range(256)) * 6
+        client.program_boot(data)
+        xml, first, first_zlp, second, second_zlp = client.ep_out.calls
+        attrs = ET.fromstring(xml).find('program').attrib
+        self.assertEqual(attrs, {'SECTOR_SIZE_IN_BYTES': '512',
+                                 'physical_partition_number': '0',
+                                 'start_sector': str(BOOT_START),
+                                 'num_partition_sectors': '3'})
+        self.assertEqual(first + second, data)
+        self.assertEqual((first_zlp, second_zlp), (b'', b''))
+        self.assertEqual(client.states, [True, False])
+
+    def test_out_of_bounds_never_sends_xml(self):
+        for data in (b'', b'not aligned', b'\0' * ((BOOT_SECTORS + 1) * 512)):
+            client = writer()
+            with self.assertRaises(ValueError):
+                client.program_boot(data)
+            self.assertEqual(client.ep_out.calls, [])
+
+    def test_disabled_writes_never_sends_xml(self):
+        client = writer(); client.writes_enabled = False
+        with self.assertRaises(ValueError):
+            client.program_boot(b'\0' * 512)
+        self.assertEqual(client.ep_out.calls, [])
+
+    def test_initial_nak_does_not_send_image_bytes(self):
+        client = writer()
+        def nak(**kwargs):
+            raise RuntimeError('NAK')
+        client.response = nak
+        with self.assertRaisesRegex(RuntimeError, 'NAK'):
+            client.program_boot(b'\0' * 512)
+        self.assertEqual(len(client.ep_out.calls), 1)
+
+    def test_short_raw_transfer_stops_without_retry(self):
+        client = writer(short_at=2)
+        with self.assertRaisesRegex(RuntimeError, 'Short raw write'):
+            client.program_boot(b'\0' * 1536)
+        self.assertEqual(len(client.ep_out.calls), 2)
+        self.assertEqual(client.states, [True])
+
+    def test_final_nak_is_not_success(self):
+        client = writer()
+        def ack_then_nak(rawmode, timeout=15):
+            if not rawmode:
+                raise RuntimeError('NAK')
+        client.response = ack_then_nak
+        with self.assertRaisesRegex(RuntimeError, 'NAK'):
+            client.program_boot(b'\0' * 512)
+
+
+class TransactionTests(unittest.TestCase):
+    def run_fake(self, corruption=None):
+        backup = Path(__file__).parent / 'backups/SESSION_ID'
+        primary = (backup / 'gpt_main0.bin').read_bytes()
+        misc = (backup / 'misc.bin').read_bytes()
+        gpt = transaction.read_gpt(primary)
+        payload = b'candidate' + b'\0' * (512 - 9)
+        operations = []
+
+        class FakeClient:
+            def __init__(self, log):
+                pass
+            def configure(self):
+                operations.append('read-only-configure')
+            def read(self, start, count, output):
+                operations.append('read:' + output.name)
+                value = {'gpt-before.bin': primary, 'misc-before.bin': misc,
+                         'boot-readback.bin': payload}[output.name]
+                if corruption == output.name:
+                    value = bytes([value[0] ^ 1]) + value[1:]
+                output.write_bytes(value)
+                return {'sha256': transaction.digest(value)}
+            def set_write_mode(self, enabled):
+                operations.append('enable' if enabled else 'disable')
+            def program_boot(self, data):
+                operations.append('program'); assert data == payload
+            def close(self):
+                operations.append('close')
+
+        with tempfile.TemporaryDirectory() as temporary:
+            out = Path(temporary) / 'transaction'
+            plan = {'output': str(out), 'backups': str(backup)}
+            with patch.object(transaction, 'BootWriter', FakeClient), contextlib.redirect_stdout(io.StringIO()):
+                if corruption:
+                    with self.assertRaises(ValueError):
+                        transaction.execute(plan, payload, payload, primary, gpt)
+                else:
+                    transaction.execute(plan, payload, payload, primary, gpt)
+            state = json.loads((out / 'transaction.json').read_text())
+        return state, operations
+
+    def test_success_requires_readback_and_disables_writes_first(self):
+        state, operations = self.run_fake()
+        self.assertTrue(state['readback_verified'])
+        self.assertFalse(state['reset_sent'])
+        self.assertEqual(operations, ['read-only-configure', 'read:gpt-before.bin',
+                                     'read:misc-before.bin', 'enable', 'program',
+                                     'disable', 'read:boot-readback.bin', 'close'])
+
+    def test_changed_gpt_or_misc_prevents_program(self):
+        for name in ('gpt-before.bin', 'misc-before.bin'):
+            state, operations = self.run_fake(name)
+            self.assertFalse(state['write_started'])
+            self.assertNotIn('enable', operations)
+            self.assertNotIn('program', operations)
+
+    def test_bad_readback_is_persisted_without_reset(self):
+        state, operations = self.run_fake('boot-readback.bin')
+        self.assertTrue(state['program_ack'])
+        self.assertFalse(state['readback_verified'])
+        self.assertFalse(state['reset_sent'])
+        self.assertIn('READBACK HASH MISMATCH', state['error'])
+
+
+if __name__ == '__main__':
+    unittest.main()

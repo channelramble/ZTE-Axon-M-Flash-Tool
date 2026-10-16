@@ -1,0 +1,52 @@
+#!/usr/bin/env python3
+"""One EDL reset, gated by exact Test22 full readback verified on both Macs."""
+from pathlib import Path
+import hashlib,json,os,signal,subprocess,time
+from firehose_read import Reader
+from firehose_boot_test import save_state
+ROOT=Path(__file__).resolve().parent
+TARGET='508cd08359c6602c36d1bf0a2711dc064bfae509b5773b55933d68ad1f2570a8'
+def digest(p):
+ h=hashlib.sha256()
+ with p.open('rb') as f:
+  for b in iter(lambda:f.read(4194304),b''):h.update(b)
+ return h.hexdigest()
+def main():
+ os.umask(0o077)
+ out=ROOT/'test22-edl-system-write';state=json.loads((out/'transaction.json').read_text());receipt=json.loads((out/'local-verification.json').read_text())
+ assert state['complete'] and state['full_readback_verified'] and state['protected_partitions_verified']
+ assert not state['reset_sent'] and not state['userdata_written'] and not state.get('error')
+ assert receipt['complete'] and receipt['both_macs_verified'] and receipt['all_13_block_readbacks_verified']
+ assert receipt['transaction_sha256']==digest(out/'transaction.json')
+ assert receipt['system_sha256']==state['system_after']['sha256']==TARGET
+ assert receipt['system_bytes']==(out/'system-after.bin').stat().st_size==6979321856
+ assert digest(out/'system-after.bin')==TARGET
+ for name,h in receipt['protected_sha256'].items():
+  assert name in ('gpt','boot','recovery','misc')
+  assert digest(out/'protected-after'/(name+'.bin'))==h
+ assert set(receipt['protected_sha256'])=={'gpt','boot','recovery','misc'}
+ assert not any((out/'protected-after/misc.bin').read_bytes()[:32])
+ reset=ROOT/'test22-edl-reset';reset.mkdir(exist_ok=False)
+ result={'reset_attempted':False,'reset_sent':False,'reset_ack':False,'automatic_retry':False}
+ save_state(reset/'reset-result.json',result)
+ with (reset/'reset.xml.log').open('xb') as log:
+  c=Reader(log)
+  try:
+   c.configure()
+   for name,start,count in [('gpt',0,14),('misc',18626584,2048)]:
+    row=c.read(start,count,reset/(name+'.bin'))
+    assert row['sha256']==receipt['protected_sha256'][name]
+    assert digest(reset/(name+'.bin'))==receipt['protected_sha256'][name]
+   assert not any((reset/'misc.bin').read_bytes()[:32])
+   encoded=b'<?xml version="1.0" ?><data><power value="reset"/></data>'
+   result['reset_attempted']=True;save_state(reset/'reset-result.json',result)
+   log.write(b'TX '+encoded+b'\n');log.flush()
+   try:
+    if c.ep_out.write(encoded,timeout=3000)!=len(encoded):raise RuntimeError('Short reset write; no retry')
+    result['reset_sent']=True;save_state(reset/'reset-result.json',result)
+    c.response(timeout=5);result['reset_ack']=True
+   except Exception as exc:result['response_note']=type(exc).__name__+': '+str(exc)
+   save_state(reset/'reset-result.json',result)
+  finally:c.close()
+ print(json.dumps(result),flush=True)
+if __name__=='__main__':main()

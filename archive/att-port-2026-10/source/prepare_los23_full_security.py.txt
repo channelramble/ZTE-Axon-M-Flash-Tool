@@ -1,0 +1,179 @@
+#!/usr/bin/env python3
+"""Prepare exact full-Android diagnostic payloads; never open a system image.
+
+These three same-size payloads are for the verified 20261006 LOS system only.
+They do not change the signed ADB APEX, policy, rc files, or phone state.
+"""
+from pathlib import Path
+import argparse
+import hashlib
+import json
+import struct
+
+BASE = Path(__file__).resolve().parent
+SOURCE = BASE / 'los23-full-security-analysis'
+OUT = BASE / 'prepared/los23-full-security-v1'
+INIT_SHA = 'b77252effaacb128093e75832fc906ea2c8aa2e2b6558f501c689054035e2b1e'
+FUNCTION = (0x11229c, 0x113ce4)
+FUNCTION_SHA = '673f840b42389c17c8d0be91a813cb87d319c1387df3a08a1b35b6548c508cdb'
+SPECS = {
+    '/system/bin/init': {
+        'source': 'system-bin-init.original', 'output': 'system-bin-init.diagnostic',
+        'sha256': INIT_SHA, 'bytes': 2716600,
+        'inode': 401, 'uid': 0, 'gid': 2000, 'mode': '0755',
+        'security_selinux': 'u:object_r:init_exec:s0',
+    },
+    '/system/build.prop': {
+        'source': 'system__build.prop', 'output': 'system-build.prop.diagnostic',
+        'sha256': 'e73527a5b46b08f4ddd6d67d64b6f9e12312061b38fcd7950d8d93dbde0ae479',
+        'bytes': 9997, 'inode': 658, 'uid': 0, 'gid': 0, 'mode': '0600',
+        'security_selinux': 'u:object_r:system_file:s0',
+    },
+    '/system_ext/etc/build.prop': {
+        'source': 'system_ext__etc__build.prop', 'output': 'system_ext-build.prop.diagnostic',
+        'sha256': 'f4635ce5923d6552fcf2ca24bac4ab553bf6562ba64bb8a67b44564e0a4ffbec',
+        'bytes': 1037, 'inode': 3625, 'uid': 0, 'gid': 0, 'mode': '0600',
+        'security_selinux': 'u:object_r:system_file:s0',
+    },
+}
+
+
+def sha(data):
+    return hashlib.sha256(data).hexdigest()
+
+
+def require(ok, message):
+    if not ok:
+        raise ValueError(message)
+
+
+def branch_target(offset, word):
+    require(word >> 26 == 0b100101, 'expected AArch64 BL')
+    imm = word & 0x3ffffff
+    if imm & 0x2000000:
+        imm -= 0x4000000
+    return offset + imm * 4
+
+
+def patch_init(data):
+    require(sha(data) == INIT_SHA, 'unexpected full-system init SHA256')
+    require(data[:6] == b'\x7fELF\x02\x01', 'expected ELF64 little endian')
+    require(struct.unpack_from('<H', data, 18)[0] == 183, 'expected AArch64')
+    header = struct.unpack_from('<16sHHIQQQIHHHHHH', data)
+    loads = [struct.unpack_from('<IIQQQQQQ', data, header[5] + header[9] * i)
+             for i in range(header[10])]
+    require(any(p[0] == 1 and p[1] & 1 and p[2] == p[3]
+                and p[2] <= FUNCTION[0] and FUNCTION[1] <= p[2] + p[5]
+                for p in loads), 'function VA/file mapping differs')
+    require(sha(data[FUNCTION[0]:FUNCTION[1]]) == FUNCTION_SHA,
+            'unexpected own SetupSelinux body')
+    context = {
+        0x113634: '67a50594',  # BL security_getenforce@plt
+        0x113638: '1f040071',  # CMP W0,#1
+        0x11363c: '00010054',  # B.EQ same desired value
+        0x113640: '20008052',  # MOV W0,#1
+        0x113644: '23a80594',  # BL security_setenforce@plt
+        0x113648: 'a0000034',  # CBZ W0,success
+    }
+    for offset, expected in context.items():
+        require(data[offset:offset + 4].hex() == expected,
+                f'wrong instruction at {offset:#x}')
+    require(branch_target(0x113634, struct.unpack_from('<I', data, 0x113634)[0]) == 0x27cbd0,
+            'wrong getenforce destination')
+    require(branch_target(0x113644, struct.unpack_from('<I', data, 0x113644)[0]) == 0x27d6d0,
+            'wrong setenforce destination')
+    result = bytearray(data)
+    result[0x113638:0x11363c] = bytes.fromhex('1f000071')
+    result[0x113640:0x113644] = bytes.fromhex('00008052')
+    result = bytes(result)
+    require([i for i, (a, b) in enumerate(zip(data, result)) if a != b]
+            == [0x113639, 0x113640], 'unexpected init changes')
+    return result
+
+
+def patch_properties(data, changes):
+    lines = data.splitlines(keepends=True)
+    result = data
+    for key, old, new in changes:
+        require(sum(line.startswith(key + b'=') for line in lines) == 1,
+                f'wrong property count: {key.decode()}')
+        before = key + b'=' + old + b'\n'
+        after = key + b'=' + new + b'\n'
+        require(result.count(before) == 1, f'wrong property value: {key.decode()}')
+        result = result.replace(before, after)
+    require(len(result) == len(data), 'property payload size changed')
+    return result
+
+
+def transform_files(files):
+    """Return new payload dict and evidence; exact three original paths required."""
+    require(set(files) == set(SPECS), 'expected exactly three original files')
+    for path, spec in SPECS.items():
+        require(len(files[path]) == spec['bytes'] and sha(files[path]) == spec['sha256'],
+                f'unexpected original bytes: {path}')
+    patched = {
+        '/system/bin/init': patch_init(files['/system/bin/init']),
+        '/system/build.prop': patch_properties(files['/system/build.prop'], [
+            (b'ro.secure', b'1', b'0'),
+            (b'ro.adb.secure', b'1', b'0'),
+            (b'ro.debuggable', b'0', b'1'),
+        ]),
+        '/system_ext/etc/build.prop': patch_properties(files['/system_ext/etc/build.prop'], [
+            (b'ro.adb.secure', b'1', b'0'),
+        ]),
+    }
+    entries = []
+    for path, new in patched.items():
+        original = files[path]
+        require(len(new) == len(original), f'length changed: {path}')
+        entries.append({
+            'filesystem_path': path,
+            'original_sha256': sha(original), 'original_bytes': len(original),
+            'output_name': SPECS[path]['output'],
+            'output_sha256': sha(new), 'output_bytes': len(new),
+            'changed_byte_offsets': [i for i, (a, b) in enumerate(zip(original, new)) if a != b],
+            'original_inode_metadata': {key: SPECS[path][key]
+                                        for key in ['inode', 'uid', 'gid', 'mode', 'security_selinux']},
+        })
+    require([len(item['changed_byte_offsets']) for item in entries] == [2, 3, 1],
+            'unexpected change counts')
+    return patched, {
+        'diagnostic_only': True,
+        'shared_image_opened_or_modified': False,
+        'entries': entries,
+        'own_init_function': {'start': hex(FUNCTION[0]), 'end_exclusive': hex(FUNCTION[1]),
+                              'original_sha256': FUNCTION_SHA},
+        'init_change': 'Compare current SELinux enforcing value with desired0; call security_setenforce(0) only when different. Original error handling, policy load, restorecon and all branches remain.',
+        'property_change': 'ro.secure=0, ro.adb.secure=0, ro.debuggable=1; override duplicate ro.adb.secure in system_ext consistently.',
+        'unchanged': ['ro.build.type=user', 'signed com.android.adbd APEX', 'SELinux policy files',
+                      'service rc files', 'all filesystem inode metadata/xattrs'],
+        'limits': ['Full Android runtime not yet tested.',
+                   'Permissive/root/unauthenticated adb is temporary diagnostic behavior, not production security.',
+                   'Later properties or a different loaded APEX/policy can affect runtime; verify live UID, enforcement, USB and adbd logs.',
+                   'No format, installation, userdata operation, or image mutation is performed by this helper.'],
+    }
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--output-dir', type=Path, default=OUT)
+    args = parser.parse_args()
+    files = {path: (SOURCE / spec['source']).read_bytes() for path, spec in SPECS.items()}
+    patched, report = transform_files(files)
+    args.output_dir.mkdir(parents=True, exist_ok=False)
+    for entry in report['entries']:
+        path = args.output_dir / entry['output_name']
+        with path.open('xb') as stream:
+            stream.write(patched[entry['filesystem_path']])
+        require(sha(path.read_bytes()) == entry['output_sha256'], 'output readback mismatch')
+        entry['output_path'] = str(path.resolve())
+    report['passed'] = True
+    target = args.output_dir / 'manifest.json'
+    with target.open('x') as stream:
+        json.dump(report, stream, indent=2)
+        stream.write('\n')
+    print(target)
+
+
+if __name__ == '__main__':
+    main()

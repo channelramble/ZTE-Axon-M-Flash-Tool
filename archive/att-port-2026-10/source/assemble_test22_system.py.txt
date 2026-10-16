@@ -1,0 +1,127 @@
+#!/usr/bin/env python3
+"""Local immutable Test22 system clone: seven same-size file-data patches only."""
+from pathlib import Path
+import hashlib, json, os, re, subprocess
+from assemble_test20_system import dbg, file_sha, path_ok, FSCK
+
+ROOT = Path(__file__).resolve().parent
+SOURCE_SHA = '7c32f735219768f31444400c67cf996b5f80de4c17d0d1c1ed65a7d0acf0883a'
+REVIEW_PINS = {
+    'prepared/test21-gatekeeper-v1/manifest.json': '0468e69ece62151b7021aee7b5a0a5a7f88bbd32a8aff14163c4679e5376dfa9',
+    'prepared/test22-gpu-meminfo-v1/manifest.json': '833b9e62c879f6ac3838957e7b1f1b251c27461d4b20131ddef733ffc4dd2a8f',
+    'test21-gatekeeper-independent-review.json': '217cd3bb35d4d41e48640ff2d5bb639eead60f8132f6a7b843d614795461e365',
+    'test22-gpu-meminfo-independent-review.json': 'bea811071eb96c39d723e648ee63623d11361ada48c3591dfd821ab7ab24e88a',
+    'test22-logging-payloads/manifest.json': '5703346aa80f38b5580932399c9b1f3e9d6f50c9566176589166a0d6e2fac35e',
+    'test22-logging-independent-review.json': 'dd2647835eeb01f743e95cb0ac00c62d2882121dc8a733bb9610efa00eed55ad',
+    'prepared/test22-gatekeeper-service-v1/manifest.json': '692bd41dcc2cf7161e073c225533ce5ce25e21b0a1a82ea0394b40b9284e5b5d',
+    'test22-gatekeeper-service-independent-review.json': '6b8c358f61d0123a5d3f4d15af8d6bd56437bc7886811e7ee37886bd523069e0',
+}
+NATIVE = [
+    ('test21-gatekeeper-v1', '/system/bin/gatekeeperd', 'a4ecd5222e7e935057a867f97b2a425c90fa5a1fd7576207d212ee0c20238c94',
+     '6ad0a440825550c3f5ec504bf438cabcbbb987cf581f088cb939d52164deb5f6', 'test21-gatekeeper-independent-review.json'),
+    ('test22-gpu-meminfo-v1', '/system/lib64/libmeminfo.so', 'c818331ef3c3ee086fd832a3f06c2039259d16023f17bd7e2dba4d8bf677e64d',
+     '040e0c8f97434b8d101914901f55b346c4b27eee8dc82b43f2a766258245a028', 'test22-gpu-meminfo-independent-review.json')]
+sha = lambda b: hashlib.sha256(b).hexdigest()
+
+def main():
+    os.umask(0o077)
+    source = ROOT / 'test20-system-v1/system.img'
+    assert source.is_file() and not source.is_symlink() and source.stat().st_size == 6979321856
+    assert file_sha(source) == SOURCE_SHA
+    for name, digest in REVIEW_PINS.items():
+        assert sha((ROOT / name).read_bytes()) == digest
+    out = ROOT / 'test22-system-v1'
+    assert not out.exists() and not out.is_symlink()
+    rows = []
+    pins = {}
+    for directory, target, original, result, review_name in NATIVE:
+        folder = ROOT / 'prepared' / directory
+        manifest = json.loads((folder / 'manifest.json').read_text())
+        review_path = ROOT / review_name
+        review = json.loads(review_path.read_text())
+        if directory == 'test21-gatekeeper-v1':
+            assert review['passed'] and review['candidate_sha256'] == result
+        else:
+            assert review['result'] == 'pass for exact local diagnostic candidate; hardware runtime untested'
+            assert len(review['checks']) == 15 and all(v is True for v in review['checks'].values())
+            assert review['output_sha256'] == result and review['source_sha256'] == original
+            assert review['manifest_sha256'] == sha((folder / 'manifest.json').read_bytes())
+        assert manifest['target'] == target and manifest['source_sha256'] == original and manifest['output_sha256'] == result
+        rows.append({'path': target, 'source_sha256': original, 'output_sha256': result, 'data': (folder / manifest['payload']).read_bytes()})
+        pins[str((folder / 'manifest.json').relative_to(ROOT))] = sha((folder / 'manifest.json').read_bytes())
+        pins[review_name] = sha(review_path.read_bytes())
+    logging = ROOT / 'test22-logging-payloads'
+    manifest = json.loads((logging / 'manifest.json').read_text())
+    review_path = ROOT / 'test22-logging-independent-review.json'
+    review = json.loads(review_path.read_text())
+    assert review['passed'] and review['manifest_sha256'] == sha((logging / 'manifest.json').read_bytes())
+    pins['test22-logging-payloads/manifest.json'] = sha((logging / 'manifest.json').read_bytes())
+    pins[review_path.name] = sha(review_path.read_bytes())
+    for row in manifest['files']:
+        assert Path(row['payload_file']).name == row['payload_file']
+        rows.append({'path': row['filesystem_path'], 'source_sha256': row['original_sha256'],
+                     'output_sha256': row['sha256'], 'data': (logging / row['payload_file']).read_bytes()})
+    folder = ROOT / 'prepared/test22-gatekeeper-service-v1'
+    service_manifest = json.loads((folder / 'manifest.json').read_text())
+    service_review = json.loads((ROOT / 'test22-gatekeeper-service-independent-review.json').read_text())
+    assert service_review['passed'] and service_review['manifest_sha256'] == sha((folder / 'manifest.json').read_bytes())
+    assert service_manifest['target'] == '/vendor/etc/init/android.hardware.gatekeeper@1.0-service.rc'
+    rows.append({'path': service_manifest['target'], 'source_sha256': service_manifest['source_sha256'],
+                 'output_sha256': service_manifest['output_sha256'], 'data': (folder / service_manifest['payload']).read_bytes()})
+    pins['prepared/test22-gatekeeper-service-v1/manifest.json'] = sha((folder / 'manifest.json').read_bytes())
+    pins['test22-gatekeeper-service-independent-review.json'] = sha((ROOT / 'test22-gatekeeper-service-independent-review.json').read_bytes())
+    assert len(rows) == len({r['path'] for r in rows}) == 7
+    expected_paths = {'/system/bin/gatekeeperd', '/system/lib64/libmeminfo.so', '/system/etc/init/hw/init.rc',
+                      '/system/etc/axon-diag-test20-collect.sh', '/system/etc/axon-diag-test20-persist.sh',
+                      '/system/etc/init/axon-diag-test20.rc', '/vendor/etc/init/android.hardware.gatekeeper@1.0-service.rc'}
+    assert {r['path'] for r in rows} == expected_paths
+    patches = []; used = set(); stats = {}; contents = {}
+    for row in rows:
+        name = row['path']; path_ok(name)
+        original = dbg(source, 'cat ' + name); data = row.pop('data')
+        assert sha(original) == row['source_sha256'] and sha(data) == row['output_sha256'] and len(original) == len(data)
+        stat = dbg(source, 'stat ' + name)
+        assert b'Type: regular' in stat and b'Links: 1 ' in stat and b'Flags: 0x80000' in stat
+        assert int(re.search(rb'\bSize: (\d+)', stat).group(1)) == len(data)
+        stats[name] = stat; contents[name] = data
+        blocks = []
+        for logical in range((len(data) + 4095) // 4096):
+            old = original[logical * 4096:(logical + 1) * 4096]
+            new = data[logical * 4096:(logical + 1) * 4096]
+            if old == new: continue
+            value = dbg(source, f'bmap {name} {logical}').strip(); assert value.isdigit()
+            physical = int(value); assert physical > 0 and physical not in used
+            used.add(physical); blocks.append(physical)
+            with source.open('rb') as f:
+                f.seek(physical * 4096); assert f.read(len(old)) == old
+            patches.append((physical * 4096, old, new))
+        row.update(bytes=len(data), changed_bytes=sum(a != b for a,b in zip(original,data)),
+                   changed_data_blocks=blocks, inode_metadata_sha256=sha(stat))
+    out.mkdir(mode=0o700)
+    image = out / 'system.img'
+    subprocess.run(['/bin/cp', '-c', str(source), str(image)], check=True)
+    with image.open('r+b') as f:
+        for offset, old, new in patches:
+            f.seek(offset); assert f.read(len(old)) == old; f.seek(offset); f.write(new)
+        f.flush(); os.fsync(f.fileno())
+    cursor = 0
+    with source.open('rb') as a, image.open('rb') as b:
+        for offset, old, new in sorted(patches) + [(source.stat().st_size, b'', b'')]:
+            left = offset - cursor; assert left >= 0
+            while left:
+                count = min(left, 4 * 1024 * 1024); assert a.read(count) == b.read(count); left -= count
+            assert a.read(len(old)) == old and b.read(len(new)) == new; cursor = offset + len(old)
+    for name, data in contents.items():
+        assert dbg(image, 'cat ' + name) == data and dbg(image, 'stat ' + name) == stats[name]
+    check = subprocess.run([FSCK, '-fn', str(image)], capture_output=True)
+    (out / 'e2fsck-read-only.txt').write_bytes(check.stdout + check.stderr); assert check.returncode == 0
+    assert file_sha(source) == SOURCE_SHA
+    result = {'passed': True, 'source_sha256': SOURCE_SHA, 'image_sha256': file_sha(image), 'bytes': image.stat().st_size,
+              'payload_and_review_pins': pins, 'files': rows, 'all_other_image_bytes_exact': True,
+              'all_inode_metadata_xattrs_preserved': True, 'read_only_fsck_passed': True,
+              'phone_operations': False, 'hardware_tested': False, 'boot_recovery_userdata_unchanged': True}
+    (out / 'manifest.json').write_text(json.dumps(result, indent=2) + '\n')
+    print(json.dumps({k: result[k] for k in ('passed','image_sha256','bytes','hardware_tested')}), flush=True)
+
+if __name__ == '__main__':
+    main()

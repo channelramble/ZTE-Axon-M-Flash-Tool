@@ -1,0 +1,24 @@
+from pathlib import Path
+import time,json,os
+from capture_test22_adb import ADB,PORT,ROOT,Capture,bounded_process,identity_command,verify_identity,write_text_capture,save_state
+os.umask(0o077)
+out=ROOT/'test22-black-screen-v1';out.mkdir(exist_ok=False)
+state={'files':{},'read_only':True,'complete':False};save_state(out,state)
+raw,rc,status=bounded_process([str(ADB),'-P',PORT,'devices'],10,65536)
+rows=[x.split() for x in raw.decode().splitlines()[1:] if len(x.split())>=2]
+assert len(rows)==1 and rows[0][1]=='device'
+c=Capture(rows[0][0],time.monotonic()+180)
+b,info=c.remote(identity_command(),4096,10);assert verify_identity(b,info)
+commands=[
+('user.txt','dumpsys user; cmd user is-user-unlocked 0',131072,12),
+('activities.txt','dumpsys activity activities',262144,12),
+('power.txt','dumpsys power',131072,12),
+('window.txt','dumpsys window displays; dumpsys window policy',262144,12),
+('storage.txt','dumpsys mount',131072,12),
+('home.txt','cmd package resolve-activity --brief -a android.intent.action.MAIN -c android.intent.category.HOME; cmd package query-activities --brief -a android.intent.action.MAIN -c android.intent.category.HOME; settings get global device_provisioned; settings get secure user_setup_complete',65536,12),
+('system-log.txt','logcat -b system -d -t 4000',1048576,12),
+('events-log.txt','logcat -b events -d -t 1000',262144,12),
+('processes.txt','ps -A -o USER,PID,PPID,NAME,STAT; cat /proc/uptime',131072,10),
+]
+for name,command,cap,seconds in commands:write_text_capture(c,out,state,name,command,cap,seconds)
+state['complete']=True;save_state(out,state);print('Black-screen capture complete',flush=True)

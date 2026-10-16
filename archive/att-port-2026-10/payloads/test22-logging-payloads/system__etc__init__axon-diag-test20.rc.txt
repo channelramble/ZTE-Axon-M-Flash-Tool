@@ -1,0 +1,14 @@
+# Test22: RAM capture after bootstrap APEX; cache saving after fs.            
+service axon-diag-test22 /system/bin/sh /system/etc/axon-diag-test20-collect.sh
+    user root
+    group root system log readproc
+    seclabel u:r:init:s0
+    disabled
+    oneshot
+
+service axon-save-test22 /system/bin/sh /system/etc/axon-diag-test20-persist.sh
+    user root
+    group root system log readproc
+    seclabel u:r:init:s0
+    disabled
+    oneshot

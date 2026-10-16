@@ -1,0 +1,143 @@
+#!/usr/bin/env python3
+"""Offline exact-candidate and full-partition tests; no real transport."""
+import contextlib
+import io
+import json
+from pathlib import Path
+import tempfile
+import time
+import unittest
+from unittest.mock import Mock, patch
+
+import adb_test07_control as writer
+from test_adb_boot_usb_control import FakeBoot
+
+ROOT = Path(__file__).resolve().parent
+PLAN = ROOT / 'test07-early-blue-led-adb-only-local-plan.json'
+
+
+class Test07WriterTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.values = writer.load_plan(PLAN)
+        cls.plan, cls.image, cls.padded, cls.gpt, cls.current, cls.recovery = cls.values
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix='axon-test07-offline-')
+        self.directory = Path(self.temp.name)
+
+    def tearDown(self):
+        self.temp.cleanup()
+
+    def plan_file(self, **updates):
+        data = json.loads(PLAN.read_text())
+        data.update(updates)
+        path = self.directory / 'plan.json'
+        path.write_text(json.dumps(data))
+        return path
+
+    def test_actual_exact_candidate_and_current_state_file_preflight(self):
+        self.assertEqual(writer.digest(self.image), writer.IMAGE_SHA)
+        self.assertEqual(writer.digest(self.padded), writer.PADDED_SHA)
+        self.assertEqual(len(self.padded), 51131 * 512)
+        self.assertEqual(writer.digest(self.current), writer.CURRENT_BOOT_SHA)
+        self.assertEqual(writer.digest(self.recovery), writer.CURRENT_RECOVERY_SHA)
+        self.assertEqual(len(self.current), 67108864)
+
+    def test_default_is_files_only_and_creates_no_evidence_directory(self):
+        output = self.directory / writer.OUTPUT_NAME
+        with patch.object(writer, 'execute', side_effect=AssertionError('Unexpected execute')):
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(writer.main([str(self.plan_file(output=str(output)))]), 0)
+        self.assertFalse(output.exists())
+
+    def test_no_plan_hash_target_or_current_backup_bypass(self):
+        cases = (
+            {'partition': 'recovery'},
+            {'image_sha256': '0' * 64},
+            {'image': str(ROOT / 'prepared/reader-3.2.3-boot-adb-only.img'),
+             'image_sha256': 'dbefa370bc3014c2931ac9d940fc9417ee5f7bbf99fe5e3d865a9f59d0139b2e'},
+            {'image': str(ROOT / 'prepared/reader-3.2.3-boot-adb-only.img')},
+            {'current_boot': str(ROOT / 'backups/SESSION_ID/boot.bin')},
+            {'current_recovery': str(ROOT / 'backups/SESSION_ID/recovery.bin')},
+            {'output': str(self.directory / 'old-output')},
+            {'adb': '/usr/bin/adb'},
+        )
+        for updates in cases:
+            with self.subTest(updates=updates), self.assertRaises(ValueError):
+                writer.load_plan(self.plan_file(**updates))
+
+    def test_changed_reviewed_dependency_is_rejected(self):
+        with patch.dict(writer.DEPENDENCIES, {'adb_boot_usb_control.py': '0' * 64}):
+            with self.assertRaisesRegex(ValueError, 'dependency changed'):
+                writer.load_plan(PLAN)
+
+    def test_direct_execution_cannot_bypass_immutable_bytes(self):
+        values = list(self.values)
+        factory = Mock(side_effect=AssertionError('No device access'))
+        for index in (1, 2, 3, 4, 5):
+            mutated = list(values)
+            data = mutated[index]
+            mutated[index] = data[:-1] + bytes([data[-1] ^ 1])
+            with self.subTest(index=index), self.assertRaises(ValueError):
+                writer.execute(*mutated, client_factory=factory)
+        factory.assert_not_called()
+
+    def run_fake(self, fault=None):
+        output = self.directory / str(fault) / writer.OUTPUT_NAME
+        plan = dict(self.plan, output=str(output))
+        fake = FakeBoot(self.current, self.recovery, self.gpt, fault)
+        with patch.object(writer.transaction.base.subprocess, 'Popen', side_effect=AssertionError('No real transport')):
+            if fault:
+                with self.assertRaises(RuntimeError):
+                    writer.execute(plan, *self.values[1:], client_factory=lambda *args: fake)
+                result = json.loads((output / 'transaction.json').read_text())
+            else:
+                result = writer.execute(plan, *self.values[1:], client_factory=lambda *args: fake)
+        return fake, result
+
+    def test_success_is_one_boot_write_with_full_tail_and_unchanged_recovery_misc(self):
+        fake, result = self.run_fake()
+        self.assertEqual(fake.writes, 1)
+        self.assertEqual(fake.geometry_calls, 2)
+        self.assertEqual(result['node'], '/dev/block/mmcblk0p18')
+        self.assertEqual(result['start_sector'], 1050624)
+        self.assertEqual(result['partition_sectors'], 131072)
+        self.assertEqual(result['image_sha256'], writer.IMAGE_SHA)
+        self.assertEqual(result['expected_before_boot_sha256'], writer.CURRENT_BOOT_SHA)
+        for flag in ('readback_verified', 'boot_tail_unchanged', 'recovery_unchanged', 'misc_unchanged'):
+            self.assertTrue(result[flag])
+        self.assertFalse(result['reset_sent'])
+        self.assertEqual(result['phase'], 'complete')
+
+    def test_fresh_full_partition_or_geometry_mismatch_blocks_write(self):
+        for fault in ('gpt-before', 'boot-before', 'recovery-before', 'misc-before', 'stage', 'late-geometry'):
+            with self.subTest(fault=fault):
+                fake, result = self.run_fake(fault)
+                self.assertEqual(fake.writes, 0)
+                self.assertFalse(result['write_started'])
+                self.assertFalse(result['readback_verified'])
+                self.assertFalse(result['reset_sent'])
+
+    def test_postwrite_full_tail_or_protected_partition_corruption_never_retries(self):
+        for fault in ('boot-after', 'recovery-after', 'misc-after', 'write'):
+            with self.subTest(fault=fault):
+                fake, result = self.run_fake(fault)
+                self.assertEqual(fake.writes, 1)
+                self.assertFalse(result['readback_verified'])
+                self.assertFalse(result['reset_sent'])
+                self.assertEqual(result['phase'], 'error')
+                self.assertNotIn(fake.serial, json.dumps(result))
+
+    def test_existing_evidence_output_is_immutable(self):
+        output = self.directory / writer.OUTPUT_NAME
+        output.mkdir()
+        factory = Mock(side_effect=AssertionError('No device access'))
+        plan = dict(self.plan, output=str(output))
+        with self.assertRaises(FileExistsError):
+            writer.execute(plan, *self.values[1:], client_factory=factory)
+        factory.assert_not_called()
+
+
+if __name__ == '__main__':
+    unittest.main(verbosity=2)

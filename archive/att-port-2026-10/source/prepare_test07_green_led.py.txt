@@ -1,0 +1,120 @@
+#!/usr/bin/env python3
+"""Switch the unflashed early-level6 marker to the physically verified green LED."""
+import json
+import os
+from pathlib import Path
+import struct
+import sys
+
+ROOT = Path(__file__).resolve().parent
+sys.path.insert(0, str(ROOT.parent / 'ZTE-Axon-M-Flash-Tool/scripts'))
+from fujisan_image import BootImage, Fdt, kernel_dtbs, report, sign_image
+from prepare_test04_led import flatten, sha
+
+SOURCE_SHA = '1d46cae5a75550e5bd0ddd162c52f9288362fe1a09a93f18e522392de831bee7'
+RAW_SHA = 'a04985fb7478f1988d6421a8d99384d3d554eebc6ab00ca83ed5013551c6efc4'
+LED_PATH = ('soc', 'qcom,spmi@400f000', 'qcom,pmi8994@3', 'qcom,leds@d000')
+
+
+def walk(node, path=''):
+    here = path + '/' + node.name
+    yield here, node
+    for child in node.children:
+        yield from walk(child, here)
+
+
+def main():
+    os.umask(0o077)
+    source = ROOT / 'prepared/test-07-early-blue-led-boot-adb-only.img'
+    target = ROOT / 'prepared/test-07-early-green-led-boot-adb-only.img'
+    outputs = [target, target.with_suffix('.validation.json'), target.with_suffix('.img.json')]
+    if any(p.exists() for p in outputs):
+        raise FileExistsError('Refusing to overwrite prepared artifacts')
+    data = source.read_bytes()
+    if sha(data) != SOURCE_SHA:
+        raise ValueError('Unexpected source candidate')
+    source_info = report(data)
+    if not source_info['signature_verified'] or source_info['signature_target'] != '/boot':
+        raise ValueError('Invalid source signature')
+    boot = BootImage(data)
+    compressed, raw, trees = kernel_dtbs(boot.kernel)
+    if sha(raw) != RAW_SHA or len(trees) != 2:
+        raise ValueError('Unexpected early-LED kernel or DT count')
+    blobs, changes = [], []
+    for index, (blob, tree) in enumerate(trees):
+        before = flatten(tree.root)
+        parent = tree.root
+        for name in LED_PATH:
+            parent = parent.child(name)
+            if parent is None:
+                raise ValueError('Missing RGB parent')
+        for name, color, identifier, old, new, pwm_name in (
+                ('qcom,rgb_1', 'green', 4, 'off', 'on', 'pwm@b200'),
+                ('qcom,rgb_2', 'blue', 5, 'on', 'off', 'pwm@b100')):
+            node = parent.child(name)
+            expected = {'linux,name': color.encode() + b'\0',
+                        'qcom,id': struct.pack('>I', identifier),
+                        'qcom,mode': b'pwm\0', 'qcom,pwm-us': struct.pack('>I', 1000),
+                        'qcom,default-state': old.encode() + b'\0'}
+            if node is None or any(node.props.get(k) != v for k, v in expected.items()):
+                raise ValueError('Unexpected ' + color + ' LED configuration')
+            if 'linux,default-trigger' in node.props or 'qcom,turn-off-delay-ms' in node.props:
+                raise ValueError('Unexpected trigger or delayed marker shutoff')
+            handle = node.props['pwms'][:4]
+            providers = [(p, n) for p, n in walk(tree.root)
+                         if n.props.get('phandle', n.props.get('linux,phandle')) == handle]
+            if len(providers) != 1:
+                raise ValueError('PWM provider must resolve uniquely')
+            path, pwm = providers[0]
+            if (not path.endswith('/qcom,pmi8994@3/' + pwm_name)
+                    or pwm.props.get('compatible') != b'qcom,qpnp-pwm\0'
+                    or pwm.props.get('status', b'okay\0') not in (b'ok\0', b'okay\0')):
+                raise ValueError('Unexpected PWM provider')
+            node.props['qcom,default-state'] = new.encode() + b'\0'
+        new_blob = tree.serialize(free=8192)
+        after = flatten(Fdt(new_blob).root)
+        actual = {k for k in before.keys() | after.keys() if before.get(k) != after.get(k)}
+        expected = {('//' + '/'.join(LED_PATH + (n,)), 'qcom,default-state')
+                    for n in ('qcom,rgb_1', 'qcom,rgb_2')}
+        if actual != expected:
+            raise ValueError('Unexpected DT semantic difference')
+        if tree.reserve != Fdt(new_blob).reserve:
+            raise ValueError('DT memory reservation changed')
+        blobs.append(new_blob)
+        changes.append({'dt_index': index, 'before_sha256': sha(blob),
+                        'after_sha256': sha(new_blob),
+                        'green_default': 'off->on', 'blue_default': 'on->off'})
+    signed = sign_image(boot.rebuild(kernel=compressed + b''.join(blobs)), '/boot',
+                        str(ROOT / 'keys/axon-m-local.key'), str(ROOT / 'keys/axon-m-local.pem'))
+    rebuilt = BootImage(signed)
+    comp2, raw2, trees2 = kernel_dtbs(rebuilt.kernel)
+    if comp2 != compressed or raw2 != raw or [b for b, _ in trees2] != blobs:
+        raise ValueError('Unexpected kernel or DT roundtrip change')
+    if (rebuilt.ramdisk != boot.ramdisk or rebuilt.cmdline != boot.cmdline
+            or rebuilt.second != boot.second
+            or boot.rebuild(kernel=rebuilt.kernel) != rebuilt.payload):
+        raise ValueError('Unexpected non-DT payload change')
+    info = report(signed)
+    if (not info['signature_verified'] or not info['boot_id_valid']
+            or info['signature_target'] != '/boot'
+            or any(t['free_tail_bytes'] != 8192 for t in info['dtbs'])):
+        raise ValueError('Final validation failed')
+    validation = dict(source_image=source.name, source_sha256=SOURCE_SHA,
+                      image=target.name, image_bytes=len(signed), image_sha256=sha(signed),
+                      padded_bytes=(len(signed) + 511) // 512 * 512,
+                      padded_sha256=sha(signed + b'\0' * (-len(signed) % 512)),
+                      kernel_raw_sha256=sha(raw), kernel_gzip_unchanged=True,
+                      ramdisk_unchanged=True, cmdline_and_load_addresses_unchanged=True,
+                      dt_changes=changes, only_two_default_state_properties_changed=True,
+                      initcall_rotation_unchanged=True, adb_only_ramdisk_retained=True,
+                      signature_verified=True, boot_id_valid=True, hardware_tested=False,
+                      interpretation='A fresh green transition after starting this image supports entry into the first level6 RGB driver. No green remains inconclusive. Do not confuse bootloader charging indication or retained PMIC state with a fresh kernel marker.')
+    for path, content in ((target, signed), (outputs[1], (json.dumps(validation, indent=2)+'\n').encode()),
+                          (outputs[2], (json.dumps(info, indent=2)+'\n').encode())):
+        with path.open('xb') as f:
+            f.write(content)
+    print(json.dumps(validation, indent=2))
+
+
+if __name__ == '__main__':
+    main()

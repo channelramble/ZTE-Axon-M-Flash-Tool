@@ -1,0 +1,63 @@
+#!/usr/bin/env python3
+"""Read-only fixed GPT/boot/recovery/misc audit; never programs or resets."""
+import argparse
+import hashlib
+import json
+import os
+from pathlib import Path
+import signal
+
+from firehose_read import Reader
+from firehose_boot_test import save_state
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('phase', choices=('before', 'after'))
+    parser.add_argument('spec', type=Path)
+    parser.add_argument('output', type=Path)
+    args = parser.parse_args()
+    os.umask(0o077)
+    spec = json.loads(args.spec.read_text())
+    specs = [('gpt', 0, 14, '7f1e4fd44e69e004189f0256ce6d35addfb1e3dbfe1cd55bfd2047b580b1e891'),
+             ('boot', 1050624, 131072, spec['expected_full_boot_' + args.phase + '_sha256']),
+             ('recovery', 1181696, 131072, '29b5052e639b46c2ea08c2cbdae59ecbb2e4a38b97f7b4e703019db83434cff8'),
+             ('misc', 18626584, 2048, '30e14955ebf1352266dc2ff8067e68104607e750abb9d3b36582b8af909fcb58')]
+    for _, _, _, sha in specs:
+        if len(sha) != 64 or any(c not in '0123456789abcdef' for c in sha):
+            raise ValueError('Invalid expected hash')
+    args.output.mkdir(mode=0o700, exist_ok=False)
+    state_path = args.output / 'audit.json'
+    state = {'phase': 'created', 'capture_phase': args.phase,
+             'all_verified': False, 'writes_sent': False, 'reset_sent': False}
+    save_state(state_path, state)
+    def deadline(*unused):
+        raise TimeoutError('Read-only audit deadline; no reset')
+    signal.signal(signal.SIGALRM, deadline)
+    signal.alarm(240)
+    with (args.output / 'firehose.xml.log').open('xb') as log:
+        client = Reader(log)
+        try:
+            client.configure()
+            for name, start, count, expected in specs:
+                path = args.output / (name + '.bin')
+                result = client.read(start, count, path)
+                if (path.stat().st_size != count * 512
+                        or hashlib.sha256(path.read_bytes()).hexdigest() != expected):
+                    raise ValueError('Full ' + args.phase + ' audit mismatch: ' + name)
+                state[name] = result
+                save_state(state_path, state)
+            state.update(phase='complete', all_verified=True)
+            save_state(state_path, state)
+            print(json.dumps({'full_audit_passed': True, 'capture_phase': args.phase}), flush=True)
+        except BaseException as exc:
+            state.update(phase='error', error=type(exc).__name__ + ': ' + str(exc))
+            save_state(state_path, state)
+            raise
+        finally:
+            client.close()
+    signal.alarm(0)
+
+
+if __name__ == '__main__':
+    main()

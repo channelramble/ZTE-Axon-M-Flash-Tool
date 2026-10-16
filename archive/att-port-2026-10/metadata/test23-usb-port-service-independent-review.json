@@ -1,0 +1,82 @@
+{
+  "passed": true,
+  "builder_sha256": "833cf168762bb17455005f019f9237bedf4046470764b743fa6b5b13147feee3",
+  "manifest_sha256": "194f04854120c36946a780c3adc5a07f46b22cbaca8165c6865b4aa1956d9b09",
+  "source_sha256": "386ee38f0e558cefe689dba87a513d311380d98906a279d2775ec0773987db92",
+  "output_sha256": "77b3cb1253f3c113cc783d298a1e2dd603f14bc56fbe280f8f7b51aa1de37c9f",
+  "bytes": 175,
+  "changed_bytes": 89,
+  "native_sha256": "6ef50f071c02fa5e13dd3541cce9c276186f600ea6abb8d18ae00ba7e587968d",
+  "checks": [
+    "Exact source reextracted read-only from Test22",
+    "Exact source image manifest pin and image byte size",
+    "Exact same-size candidate output hash",
+    "Builder reproduces candidate exactly",
+    "Candidate equals separately extracted published RC",
+    "Only interface and disabled semantics change",
+    "Exact 89 changed bytes with 175-byte length unchanged",
+    "Native binary pin remains exact",
+    "Source inode metadata matches component receipt",
+    "Manifest contents match all independent pins",
+    "Altered source rejected",
+    "Truncated source rejected",
+    "Already restored candidate rejected as source",
+    "Existing output cannot be overwritten",
+    "No-clobber preserved every component file"
+  ],
+  "primary_sources": [
+    {
+      "repository": "LineageOS/android_hardware_interfaces",
+      "commit": "13d687a84c834af855bfb314b853b8372a7aa6d9",
+      "path": "usb/1.0/default/Usb.cpp",
+      "sha256": "9b3c744ab1f9c9f04b02495f24cc01263bf1b999cd9e2463e829b3c82ac3dced",
+      "url": "https://github.com/LineageOS/android_hardware_interfaces/blob/13d687a84c834af855bfb314b853b8372a7aa6d9/usb/1.0/default/Usb.cpp"
+    },
+    {
+      "repository": "LineageOS/android_hardware_interfaces",
+      "commit": "13d687a84c834af855bfb314b853b8372a7aa6d9",
+      "path": "usb/1.0/default/service.cpp",
+      "sha256": "814fccc8efe7d4383321e4ca6f65cb43146254affecb5f228cc78a9273f7e2a3",
+      "url": "https://github.com/LineageOS/android_hardware_interfaces/blob/13d687a84c834af855bfb314b853b8372a7aa6d9/usb/1.0/default/service.cpp"
+    },
+    {
+      "repository": "LineageOS/android_frameworks_base",
+      "commit": "958afcc3d647d57571650cee4172afe0da619171",
+      "path": "services/usb/java/com/android/server/usb/hal/port/UsbPortHidl.java",
+      "sha256": "5f4ff4766016a58bb3eee4dee3b24dd576a2aace6386f46c89aaa8f6bc141f1e",
+      "url": "https://github.com/LineageOS/android_frameworks_base/blob/958afcc3d647d57571650cee4172afe0da619171/services/usb/java/com/android/server/usb/hal/port/UsbPortHidl.java"
+    },
+    {
+      "repository": "LineageOS/android_frameworks_base",
+      "commit": "958afcc3d647d57571650cee4172afe0da619171",
+      "path": "services/usb/java/com/android/server/usb/UsbPortManager.java",
+      "sha256": "e2fbc7284a63713438ae482f748361b59ac56ba52dc8a00fb65c399645c575fd",
+      "url": "https://github.com/LineageOS/android_frameworks_base/blob/958afcc3d647d57571650cee4172afe0da619171/services/usb/java/com/android/server/usb/UsbPortManager.java"
+    },
+    {
+      "repository": "LineageOS/android_frameworks_base",
+      "commit": "958afcc3d647d57571650cee4172afe0da619171",
+      "path": "services/usb/java/com/android/server/usb/UsbService.java",
+      "sha256": "50a4c94aac6f8edf354d8d384542cd4c2a5ae6b039646adac4cafed6e775eba2",
+      "url": "https://github.com/LineageOS/android_frameworks_base/blob/958afcc3d647d57571650cee4172afe0da619171/services/usb/java/com/android/server/usb/UsbService.java"
+    }
+  ],
+  "source_analysis": [
+    "Default native service main constructs Usb, registers the default HIDL service and joins its RPC threadpool; constructor initializes singleton state.",
+    "setCallback installs a callback and starts a uevent listener; initial query and uevent callbacks enumerate dual_role_usb and report existing status.",
+    "Capability queries open mode/data_role/power_role through std::ofstream and close them without role data writes. This is an output-mode open, not a strictly read-only operation.",
+    "Only explicit switchRole RPC emits role values. Default startup/query paths contain no gadget configfs, MTP or sys.usb property operations.",
+    "Framework UsbPortHidl initial connection registers callback and queries status; pre-systemReady or error callbacks return. Empty port list and initial add/remove handling do not call setPortRoles.",
+    "UsbPortManager role switching is in explicit setPortRoles; initial added/removed ports perform status broadcasts, stats and notifications.",
+    "Restoring this exact RC reenables class hal startup and interface-based discovery while retaining service executable, class, user and group.",
+    "Observed native and Java-stack structure corroborates the published pinned source; whole-ROM source commit identity is not asserted."
+  ],
+  "limits": [
+    "This component review does not rehash or modify the full 6.98GB system image; assembly must preserve inode metadata, xattrs, extents and all bytes outside the RC.",
+    "Restored HAL permits the wider framework UsbService boot flow to advance, including existing UsbDeviceManager callbacks. Current gadget RC guards must remain preserved.",
+    "Explicit later switchRole calls can change USB roles; runtime stability and subsequent hardware failures require observation."
+  ],
+  "native_analysis_report_sha256": "de19af93c9a30375c915d7c07b0c3d36b2d0a6ac1b24b5b3307c3ebc7c145c57",
+  "phone_operations": false,
+  "system_image_modified": false
+}

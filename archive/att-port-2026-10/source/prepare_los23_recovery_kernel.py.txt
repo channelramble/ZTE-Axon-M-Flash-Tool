@@ -1,0 +1,236 @@
+#!/usr/bin/env python3
+"""Exact LOS recovery kernel/DT diagnostic transformation, local files only.
+
+This module neither signs nor writes a boot image. Running it writes only a
+private, immutable validation report. A later reviewed ramdisk builder can call
+transform_source() and use its returned kernel/cmdline. The eight skips and
+QSEE failure are diagnostics, not a production Android compatibility solution.
+"""
+import gzip
+import hashlib
+import json
+import os
+from pathlib import Path
+import struct
+import sys
+
+ROOT = Path(__file__).resolve().parent
+sys.path.insert(0, str(ROOT.parent / 'ZTE-Axon-M-Flash-Tool/scripts'))
+from fujisan_image import BootImage, Fdt, kernel_dtbs, report
+
+SOURCE_NAME = 'recovery-lineage-23.2-20261006-UNOFFICIAL-fujisan.img'
+SOURCE_SHA = '5d76032e77d24a364bfd733369470abd516c198e8217c590d286dc16ab527a5a'
+RAW_SHA = 'd1792237ae69783c646ab25ad94d439c4ad43d76a63bed37164950df4db52def'
+PATCHED_RAW_SHA = '0c14d626fcd2ea4e35895b0db4801d3b5aaf150a62806c7a90fcb4ee9a5accaa'
+MAP_SHA = 'c5099cd8c3fec0fff108a5dc7d28c9f8537a22cb5ef1059c5ec3446cce6060a9'
+BASE = 0xffffff8010080000
+RAW_BYTES = 27394080
+QSEE_OFFSET = 0x672ca0
+QSEE_OLD = bytes.fromhex('16efff97')
+QSEE_NEW = bytes.fromhex('40028012')  # MOVN W0,#18 => -ENODEV
+INITCALL_START, INITCALL_END = 0x17be8f8, 0x17c07d8
+BLACKLIST = (
+    ('adsp_loader_init', 0xffffff80117f798c, 0x17bf768),
+    ('pil_tz_init', 0xffffff80117f7b2c, 0x17bf788),
+    ('pil_mss_init', 0xffffff80117f7b4c, 0x17bf790),
+    ('msm_pil_init', 0xffffff80117f7cb8, 0x17bf798),
+    ('msm_vidc_init', 0xffffff8011809154, 0x17bfd28),
+    ('sensors_ssc_init', 0xffffff801181513c, 0x17bff30),
+    ('kgsl_3d_init', 0xffffff80117ffd58, 0x17bf828),
+    ('tz_log_init', 0xffffff801180e900, 0x17bfe48),
+)
+DT_HASHES = (
+    'b162e958ab5015cec947c25f2ad22377ad8fc54281603627e9ad2ae0205ca6fc',
+    'c674a59369cd85f4480dddd8462543cc119650e2b38ce522b6cab43368f273a5',
+)
+CONTEXTS = (
+    ('qsee_probe_through_failure_cleanup', 0x672a48, 0x67321c,
+     'b72aa8731e6c2886c0283bcc53c238ecad8f06b29fb021e2ea9416fab12fce12'),
+    ('dwc3_msm_probe', 0x79639c, 0x797234,
+     '64f7efb8744927cadb638807cded26799af90d0e265cbc1f9684452eb7f0e071'),
+    ('dwc3_msm_extcon_register', 0x7983c8, 0x798548,
+     'af496fc5fc29391ee7e022367475fb426af20ca1c9e6908107082ebf0d4b3722'),
+    ('extcon_get_edev_by_phandle', 0xcc527c, 0xcc5364,
+     '0a4e5979dde111cad4848d69b526374affd70c1861a05f33393e9f16d9b96e97'),
+    ('dwc3_mode_store', 0x799e20, 0x799f04,
+     '2d56bea43dae3a48a65529ed8d8f8f638eb1e94735ab0449b282ea67442dad79'),
+    ('do_one_initcall_blacklist_match', 0x37c8, 0x3980,
+     '9ec7c585218688f5d8ab4473d46033388ffec24b9f4eee7d797706495fcf15e9'),
+)
+
+
+def sha(data):
+    return hashlib.sha256(data).hexdigest()
+
+
+def require(condition, message):
+    if not condition:
+        raise ValueError(message)
+
+
+def bl_target(raw, address):
+    instruction, = struct.unpack_from('<I', raw, address - BASE)
+    require(instruction >> 26 == 0b100101, 'Expected AArch64 BL')
+    immediate = instruction & 0x3ffffff
+    if immediate & (1 << 25):
+        immediate -= 1 << 26
+    return address + immediate * 4
+
+
+def flatten(node, path=''):
+    here = path + '/' + node.name if node.name else ''
+    out = {here or '/': dict(node.props)}
+    for child in node.children:
+        out.update(flatten(child, here))
+    return out
+
+
+def transform_source(data):
+    """Return (kernel Image.gz+own-DTBs, diagnostic cmdline, validation)."""
+    require(sha(data) == SOURCE_SHA, 'Exact published LOS recovery source required')
+    info = report(data)
+    require(info['signature_verified'] and info['boot_id_valid'] and
+            info['signature_target'] == '/recovery', 'Source signature/boot ID mismatch')
+    boot = BootImage(data)
+    _, raw, trees = kernel_dtbs(boot.kernel)
+    require(sha(raw) == RAW_SHA and len(raw) == RAW_BYTES, 'Wrong LOS raw kernel')
+    require(tuple(sha(blob) for blob, _ in trees) == DT_HASHES, 'Wrong own recovery DT tail')
+    symbol_data = (ROOT/'kernel-analysis/lineage-23.2.System.map').read_bytes()
+    require(sha(symbol_data) == MAP_SHA, 'Wrong recovered LOS symbol map')
+    symbols = {}
+    for line in symbol_data.decode().splitlines():
+        address, kind, name = line.split()
+        symbols.setdefault(name, []).append(int(address, 16))
+    contexts = []
+    for name, start, end, digest in CONTEXTS:
+        require(sha(raw[start:end]) == digest, 'Reviewed LOS context changed: ' + name)
+        contexts.append(dict(name=name, raw_start=hex(start), raw_end_exclusive=hex(end), sha256=digest))
+
+    pointers = struct.unpack('<988Q', raw[INITCALL_START:INITCALL_END])
+    blacklist = []
+    for name, address, offset in BLACKLIST:
+        require(symbols.get(name) == [address], 'Nonunique/mismatched blacklist symbol: ' + name)
+        require(struct.unpack_from('<Q', raw, offset)[0] == address and
+                pointers.count(address) == 1, 'Blacklist initcall pointer mismatch: ' + name)
+        blacklist.append(dict(name=name, address=hex(address), pointer_offset=hex(offset)))
+    require(raw[0x146370a:0x146370e] == b'%pf\0', 'Blacklist symbol formatting changed')
+    require(raw[QSEE_OFFSET:QSEE_OFFSET+4] == QSEE_OLD, 'Original QSEE query instruction changed')
+    require(bl_target(raw, BASE+QSEE_OFFSET) == symbols['qseecom_scm_call'][0] ==
+            0xffffff80106ee8f8, 'QSEE query BL target changed')
+    for address in (0xffffff80106f2ac4, 0xffffff80106f2c18,
+                    0xffffff80106f2c30, 0xffffff80106f2c48, 0xffffff80106f2c6c):
+        require(bl_target(raw, address) == symbols['__init_waitqueue_head'][0],
+                'Pre-query queue initialization changed')
+    require(bl_target(raw, 0xffffff80106f2c88) == symbols['mutex_lock'][0] and
+            bl_target(raw, 0xffffff80106f2cac) == symbols['mutex_unlock'][0],
+            'QSEE mutex bracket changed')
+    require(bl_target(raw, 0xffffff80106f31c4) == symbols['cdev_del'][0] and
+            bl_target(raw, 0xffffff80106f31d0) == symbols['device_destroy'][0] and
+            bl_target(raw, 0xffffff80106f31d8) == symbols['class_destroy'][0] and
+            bl_target(raw, 0xffffff80106f31e4) == symbols['unregister_chrdev_region'][0],
+            'QSEE existing failure cleanup changed')
+    patched = raw[:QSEE_OFFSET] + QSEE_NEW + raw[QSEE_OFFSET+4:]
+    require(sha(patched) == PATCHED_RAW_SHA, 'Unexpected patched LOS raw hash')
+    differences = [i for i, (old, new) in enumerate(zip(raw, patched)) if old != new]
+    require(differences == list(range(QSEE_OFFSET, QSEE_OFFSET+4)), 'Raw patch scope changed')
+    require(patched[INITCALL_START:INITCALL_END] == raw[INITCALL_START:INITCALL_END],
+            'LOS initcall table must remain byte-exact')
+
+    blobs, dt_changes = [], []
+    for index, (blob, tree) in enumerate(trees):
+        before = flatten(tree.root)
+        require(tree.free_tail == 0, 'Unexpected original DT padding')
+        require(tree.add_att_reservation(), 'Original DT already reserves AT&T share region')
+        soc = tree.root.child('soc')
+        require(soc is not None, 'Missing DT soc')
+        for name, compatible in (('qcrypto@660000', b'qcom,qcrypto\0'),
+                                 ('qcedev@660000', b'qcom,qcedev\0')):
+            node = soc.child(name)
+            require(node is not None and node.props.get('compatible') == compatible and
+                    node.props.get('reg') == bytes.fromhex('00660000000200000064400000024000') and
+                    'status' not in node.props, 'Unexpected QCE device')
+            node.props['status'] = b'disabled\0'
+        usb = soc.child('ssusb@6a00000')
+        require(usb is not None and usb.props.get('compatible') == b'qcom,dwc-usb3-msm\0',
+                'Unexpected USB controller')
+        old_extcon = usb.props.get('extcon', b'')
+        providers = [(path, props) for path, props in before.items()
+                     if props.get('phandle', props.get('linux,phandle')) == old_extcon]
+        require(len(old_extcon) == 4 and any(old_extcon) and len(providers) == 1 and
+                'pericom' in providers[0][0] and
+                b'pericom' in providers[0][1].get('compatible', b''), 'Wrong absent extcon supplier')
+        # Keep the property present: deleting it enables implicit DRD host fallback.
+        usb.props['extcon'] = b'\0'*4
+        new_blob = tree.serialize(free=8192)
+        new_tree = Fdt(new_blob)
+        after = flatten(new_tree.root)
+        added = '/reserved-memory/ap_share_region@9ff00000'
+        require(set(after)-set(before) == {added} and set(before)-set(after) == set(),
+                'Unexpected DT node changes')
+        require(after[added] == {'reg': bytes.fromhex('000000009ff000000000000000100000'),
+                                 'no-map': b''}, 'AT&T reserved-memory content differs')
+        changed = []
+        for path in before:
+            for prop in before[path].keys() | after[path].keys():
+                if before[path].get(prop) != after[path].get(prop):
+                    changed.append((path, prop))
+        expected = {('/soc/qcrypto@660000', 'status'), ('/soc/qcedev@660000', 'status'),
+                    ('/soc/ssusb@6a00000', 'extcon')}
+        require(set(changed) == expected, 'Unexpected semantic DT property changes')
+        require(new_tree.reserve == tree.reserve and new_tree.bootcpu == tree.bootcpu and
+                new_tree.last == tree.last and new_tree.free_tail == 8192, 'DT metadata changed')
+        blobs.append(new_blob)
+        dt_changes.append(dict(index=index, source_sha256=sha(blob), transformed_sha256=sha(new_blob),
+                               extcon_old=old_extcon.hex(), extcon_new='00000000',
+                               added_reserved_node=added, changed_properties=sorted(changed),
+                               free_tail_bytes=8192, other_semantic_properties_exact=True))
+    kernel = gzip.compress(patched, compresslevel=9, mtime=0) + b''.join(blobs)
+    _, checked_raw, checked_trees = kernel_dtbs(kernel)
+    require(checked_raw == patched and [blob for blob, _ in checked_trees] == blobs,
+            'Kernel component roundtrip failed')
+    require('initcall_blacklist=' not in boot.cmdline, 'Source already has initcall blacklist')
+    cmdline = boot.cmdline + ' ignore_loglevel initcall_debug initcall_blacklist=' + ','.join(x[0] for x in BLACKLIST)
+    require(len(cmdline.encode()) <= 1536 and 'qseecom_init' not in cmdline, 'Diagnostic cmdline invalid')
+    validation = dict(
+        source_image=SOURCE_NAME, source_sha256=SOURCE_SHA, source_signature_and_boot_id_valid=True,
+        raw_bytes=RAW_BYTES, raw_base=hex(BASE), source_raw_sha256=RAW_SHA,
+        transformed_raw_sha256=PATCHED_RAW_SHA, transformed_kernel_component_sha256=sha(kernel),
+        transformed_kernel_component_bytes=len(kernel), qsee_instruction_offset=hex(QSEE_OFFSET),
+        qsee_instruction_address=hex(BASE+QSEE_OFFSET), qsee_original_hex=QSEE_OLD.hex(),
+        qsee_replacement_hex=QSEE_NEW.hex(), raw_changed_bytes=4,
+        queue_initialization_mutex_unlock_and_failure_cleanup_preserved=True,
+        qsee_initializer_not_blacklisted=True, diagnostic_blacklist=blacklist,
+        original_988_initcall_pointers_byte_exact=True, source_contexts=contexts,
+        deferred_flushes_free_initmem_late_cleanup_original=True,
+        no_led_instrumentation_or_caves=True, dt_changes=dt_changes,
+        diagnostic_cmdline=cmdline, diagnostic_cmdline_bytes=len(cmdline.encode()),
+        ramdisk_unmodified_by_this_module=True, image_built_or_signed=False,
+        hardware_tested=False, required_ramdisk_action='Explicit ssusb mode peripheral plus adb-only FunctionFS startup',
+        limitations=[
+            'QSEE -ENODEV and eight initcall skips are temporary diagnostics, not proven individually necessary.',
+            'QSEE response-version log reads uninitialized response data on this pre-existing error path; ignore it.',
+            'QSEE, GPU and subsystem skips prevent judging production Android security, graphics and radio/audio support.',
+            'PSTORE and F2FS encryption are disabled in this kernel; preserve userdata and use runtime logs.',
+            'Pericom remains deferred independently; the null supplier only removes DWC3 dependence on it.',
+            'Manual peripheral mode is diagnostic; cable/role detection is not repaired.'],
+    )
+    return kernel, cmdline, validation
+
+
+def main():
+    os.umask(0o077)
+    output = ROOT/'los23-recovery-kernel-transfer.json'
+    require(not output.exists() and not output.is_symlink(), 'Immutable transfer report already exists')
+    _, _, validation = transform_source((ROOT/SOURCE_NAME).read_bytes())
+    with output.open('x') as stream:
+        json.dump(validation, stream, indent=2)
+        stream.write('\n')
+        stream.flush()
+        os.fsync(stream.fileno())
+    print(json.dumps({key: validation[key] for key in (
+        'source_sha256', 'transformed_raw_sha256', 'transformed_kernel_component_sha256',
+        'raw_changed_bytes', 'image_built_or_signed', 'hardware_tested')}, indent=2))
+
+
+if __name__ == '__main__':
+    main()

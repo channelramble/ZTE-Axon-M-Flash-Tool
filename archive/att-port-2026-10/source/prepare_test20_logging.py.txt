@@ -1,0 +1,78 @@
+#!/usr/bin/env python3
+"""Create immutable full-Android diagnostic payloads, without image/phone writes."""
+from pathlib import Path
+import hashlib,json,os,subprocess
+from prepare_los23_recovery_ramdisk import cache_identity
+ROOT=Path(__file__).resolve().parent
+sha=lambda b:hashlib.sha256(b).hexdigest()
+def once(s,old,new):
+    assert s.count(old)==1, old
+    return s.replace(old,new)
+
+def payloads():
+    source=(ROOT/'test19-los-collect.sh').read_text()
+    s=source.replace('Test19','Test20').replace('test19','test20')
+    s=once(s,'RAM=/tmp/axon-diag-test20','RAM=/dev/axon-diag-test20')
+    s=once(s,'SELF=/system/bin/axon-diag-collect.sh','SELF=/system/etc/axon-diag-test20-collect.sh')
+    s=once(s,"KINDS='identity dmesg recovery usb processes stacks'","KINDS='identity dmesg logcat usb processes stacks graphics'")
+    s=once(s,'''        recovery)
+            printf '%s\\n' '--- /tmp/recovery.log (last 250000 bytes) ---'
+            if [ -r /tmp/recovery.log ]; then /system/bin/tail -c 250000 /tmp/recovery.log; fi
+            ;;''','''        logcat) /system/bin/logcat -b all -d | /system/bin/tail -c 250000 ;;
+        graphics)
+            /system/bin/ls -l /dev/kgsl-3d0 /dev/graphics /sys/class/kgsl/kgsl-3d0
+            for p in /sys/class/graphics/fb0/blank /sys/class/graphics/fb0/modes \\
+                /sys/class/kgsl/kgsl-3d0/gpuclk /sys/class/kgsl/kgsl-3d0/pwrlevel \\
+                /sys/kernel/debug/devices_deferred; do show_file "$p"; done
+            /system/bin/dumpsys SurfaceFlinger
+            ;;''')
+    s=s.replace('pidof recovery adbd','pidof adbd surfaceflinger zygote zygote64 system_server')
+    s=s.replace('init|recovery|adbd|ueventd|kworker*','init|adbd|surfaceflinger|zygote*|system_server|ueventd|kworker*')
+    s=once(s,'case "$2" in 01|02|03)', 'case "$2" in 01|02|03|04)')
+    s=once(s,'case "$3" in identity|dmesg|recovery|usb|processes|stacks)',
+             'case "$3" in identity|dmesg|logcat|usb|processes|stacks|graphics)')
+    s=once(s,'for snap in 01 02 03; do','for snap in 01 02 03 04; do')
+    s=s.replace('18 launched job groups','28 launched job groups')
+    s=once(s,'case "$snap" in 01) /system/bin/sleep 6 ;; 02) /system/bin/sleep 12 ;; esac',
+             'case "$snap" in 01) /system/bin/sleep 9 ;; 02) /system/bin/sleep 24 ;; 03) /system/bin/sleep 69 ;; esac')
+    s=once(s,'nominal snapshots at 0, 12, 30 seconds; 18 jobs maximum.',
+             'nominal snapshots at 0, 15, 45, 120 seconds; 28 jobs maximum.')
+    uuid,receipt_sha=cache_identity()
+    persist=(ROOT/'test20-los-persist.sh').read_text()
+    persist=once(persist,'__AXON_CACHE_UUID__',uuid)
+    rc='''# Full-Android diagnostic only; started explicitly after bootstrap APEX setup.
+service axon-diag-test20 /system/bin/sh /system/etc/axon-diag-test20-collect.sh
+    user root
+    group root system log readproc
+    seclabel u:r:init:s0
+    disabled
+    oneshot
+
+service axon-save-test20 /system/bin/sh /system/etc/axon-diag-test20-persist.sh
+    user root
+    group root system log readproc
+    seclabel u:r:init:s0
+    disabled
+    oneshot
+'''
+    return {'/system/etc/axon-diag-test20-collect.sh':s.encode(),
+            '/system/etc/axon-diag-test20-persist.sh':persist.encode(),
+            '/system/etc/init/axon-diag-test20.rc':rc.encode()},receipt_sha
+
+def main():
+    os.umask(0o077)
+    out=ROOT/'test20-logging-payloads';assert not out.exists()
+    files,receipt_sha=payloads();out.mkdir(mode=0o700)
+    rows=[]
+    for name,data in files.items():
+        p=out/Path(name).name;p.write_bytes(data)
+        if name.endswith('.sh'):subprocess.run(['/bin/sh','-n',str(p)],check=True)
+        rows.append({'path':name,'source_exists':False,'payload':str(p),'sha256':sha(data),'bytes':len(data),
+                     'uid':0,'gid':0,'mode':0o100644,'selinux':'u:object_r:system_file:s0'})
+    report={'files':rows,'cache_backup_receipt_sha256':receipt_sha,'phone_operations':False,
+            'logger_mounts_or_formats':False,'snapshot_seconds':[0,15,45,120],
+            'jobs_maximum':28,'job_timeout_seconds':4,'collector_nominal_seconds':126,
+            'persister_worker_timeout_seconds':145,'persister_supervisor_seconds':150}
+    (out/'manifest.json').write_text(json.dumps(report,indent=2)+'\n')
+    print(json.dumps({'payloads':len(rows),'local_only':True}))
+if __name__=='__main__':main()

@@ -1,0 +1,89 @@
+#!/usr/bin/env python3
+"""Local-only same-size diagnostic disabling of the unavailable vendor HAL."""
+from pathlib import Path
+import hashlib
+import json
+import os
+import subprocess
+
+ROOT = Path(__file__).resolve().parent
+IMAGE = ROOT / 'test20-system-v1/system.img'
+OUT = ROOT / 'prepared/test22-gatekeeper-service-v1'
+TARGET = '/vendor/etc/init/android.hardware.gatekeeper@1.0-service.rc'
+SOURCE_SHA = 'ad162265d14bc7ea2eebe739c4b3149e21dd2cfff67b2bbc5827e261d298ffa9'
+OLD = b'    interface android.hardware.gatekeeper@1.0::IGatekeeper default\n'
+NEW = b'    disabled'.ljust(len(OLD) - 1, b' ') + b'\n'
+sha = lambda data: hashlib.sha256(data).hexdigest()
+
+
+def read_image(path):
+    return subprocess.run(['/opt/homebrew/opt/e2fsprogs/sbin/debugfs', '-R',
+                           'cat ' + path, str(IMAGE)], check=True,
+                          capture_output=True).stdout
+
+
+def transform(data):
+    if len(data) != 199 or sha(data) != SOURCE_SHA or data.count(OLD) != 1:
+        raise ValueError('Unexpected source Gatekeeper service')
+    result = data.replace(OLD, NEW)
+    assert len(result) == len(data)
+    assert result.replace(NEW, OLD) == data
+    assert b'interface ' not in result
+    assert result.splitlines()[1].strip() == b'disabled'
+    return result
+
+
+def main():
+    os.umask(0o077)
+    source = read_image(TARGET)
+    output = transform(source)
+    inventory = json.loads((ROOT / 'los23-usb-rc-audit-sources/manifest.json').read_text())
+    hits = []
+    scans = []
+    for path in sorted(inventory):
+        data = read_image(path)
+        assert data or inventory[path]['bytes'] == 0, 'RC extraction failed: ' + path
+        scans.append({'path': path, 'sha256': sha(data), 'bytes': len(data)})
+        for number, line in enumerate(data.splitlines(), 1):
+            active = line.split(b'#', 1)[0].strip()
+            if b'vendor.gatekeeper-1-0' in active or b'android.hardware.gatekeeper@1.0::IGatekeeper' in active:
+                hits.append({'path': path, 'line': number, 'text': active.decode()})
+    assert hits == [
+        {'path': TARGET, 'line': 1, 'text': 'service vendor.gatekeeper-1-0 /vendor/bin/hw/android.hardware.gatekeeper@1.0-service'},
+        {'path': TARGET, 'line': 2, 'text': 'interface android.hardware.gatekeeper@1.0::IGatekeeper default'},
+    ], 'Additional service activation reference exists'
+    OUT.mkdir(mode=0o700, exist_ok=False)
+    name = 'android.hardware.gatekeeper@1.0-service.rc'
+    with (OUT / name).open('xb') as f:
+        f.write(output)
+    assert (OUT / name).read_bytes() == output
+    report = {
+        'passed': True, 'author_validation': True,
+        'target': TARGET, 'source_sha256': sha(source),
+        'output_sha256': sha(output), 'payload': name, 'bytes': len(output),
+        'changed_bytes': sum(a != b for a, b in zip(source, output)),
+        'source_image': str(IMAGE),
+        'source_image_sha256_from_manifest': json.loads((ROOT / 'test20-system-v1/manifest.json').read_text())['image_sha256'],
+        'change': 'Replace only the vendor HAL interface declaration with disabled plus whitespace padding.',
+        'preserved': ['service executable and name', 'class hal', 'user system', 'group system',
+                      'all other file bytes', 'Gatekeeper daemon credential failure semantics'],
+        'reason': 'Persist the Test21 diagnostic stopped HAL state; this QSEE-backed HAL repeatedly aborts when QSEE is unavailable.',
+        'activation': 'disabled prevents class auto-start; removing interface prevents init lazy interface lookup from finding this service.',
+        'scan': {'count': len(scans), 'files': scans, 'only_references': hits,
+                 'named_start_references_found': False},
+        'limits': ['Diagnostic unavailable HAL, not restored hardware authentication.',
+                   'An explicit external ctl.start by service name can still start a disabled service; no such init RC reference found.',
+                   'Image assembler must preserve inode metadata and xattrs.',
+                   'No hardware testing performed.'],
+        'image_modified': False, 'phone_operations': False,
+    }
+    with (OUT / 'manifest.json').open('x') as f:
+        json.dump(report, f, indent=2)
+        f.write('\n')
+    print(json.dumps({'manifest_sha256': sha((OUT / 'manifest.json').read_bytes()),
+                      'source_sha256': sha(source), 'output_sha256': sha(output),
+                      'bytes': len(output), 'scanned_rc_files': len(scans)}))
+
+
+if __name__ == '__main__':
+    main()

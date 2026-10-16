@@ -1,0 +1,54 @@
+{
+  "classification": "diagnostic compatibility fallback: GPU memory statistics unavailable",
+  "target": "/system/lib64/libmeminfo.so",
+  "source": "test22-gpu-meminfo-analysis/libmeminfo.original.so",
+  "source_sha256": "c818331ef3c3ee086fd832a3f06c2039259d16023f17bd7e2dba4d8bf677e64d",
+  "source_bytes": 149304,
+  "payload": "libmeminfo.diagnostic.so",
+  "output_sha256": "040e0c8f97434b8d101914901f55b346c4b27eee8dc82b43f2a766258245a028",
+  "output_bytes": 149304,
+  "original_copy": "libmeminfo.original.so",
+  "source_function": {
+    "symbol": "android::meminfo::ReadProcessGpuUsageKb(unsigned int,unsigned int,unsigned long*)",
+    "start": "0x140fc",
+    "end_exclusive": "0x14398",
+    "sha256": "54312b7dc9f76038ac57db1466e89a9890b924555983a2eb4f81ca9844701a5d"
+  },
+  "patch": {
+    "file_offset_and_va": "0x1419c",
+    "before": "4d0d0094",
+    "after": "18000014",
+    "before_instruction": "bl 0x176d0",
+    "after_instruction": "b 0x141fc",
+    "changed_byte_offsets": [
+      "0x1419c",
+      "0x1419d",
+      "0x1419f"
+    ]
+  },
+  "observed_failure": "BPF map retrieval yields invalid fd; constructor aborts at0x178a8 before caller can check isValid(). Exact errno/path cause has not been captured.",
+  "semantics": [
+    "Retains existing read-only BPF_OBJ_GET and unique_fd adoption",
+    "Enters native false return and fd cleanup at0x141fc, including errno/canary/register restoration",
+    "Leaves output size pointer untouched, as the existing native invalid-map error path does",
+    "Does not manufacture zero usage or successful accounting",
+    "ReadGpuTotalUsageKb wrapper inherits false; JNI caller has a native unavailable result"
+  ],
+  "preserved": [
+    "All other ELF bytes and metadata",
+    "Generic BPF abort helper",
+    "ReadPerProcessGpuMem and every other statistics function",
+    "GPU driver, shader files, rendering, allocations and kernel"
+  ],
+  "limitations": [
+    "Always returns false for ReadProcessGpuUsageKb, including if a map later becomes available",
+    "System-wide/per-process queries using this API cannot report GPU memory usage",
+    "ReadPerProcessGpuMem is separate and unchanged; later use could encounter the same unavailable-map abort",
+    "Underlying missing/inaccessible map cause is not repaired",
+    "No runtime boot-success assertion; existing processes need new library mapping before testing",
+    "Only the exact ARM64 system library is prepared; ARM32/vendor copies are untouched"
+  ],
+  "supporting_source": "https://android.googlesource.com/platform/system/memory/libmeminfo/+/refs/heads/main/sysmeminfo.cpp",
+  "source_note": "Supporting source only; exact own ELF, method body and abort helper separately pinned and decoded",
+  "phone_or_image_operations": false
+}

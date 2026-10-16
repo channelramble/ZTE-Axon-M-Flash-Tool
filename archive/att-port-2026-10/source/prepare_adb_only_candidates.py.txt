@@ -1,0 +1,90 @@
+#!/usr/bin/env python3
+"""Create separate adb-only variants without changing historical artifacts."""
+import hashlib
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+
+ROOT = Path(__file__).resolve().parent
+sys.path.insert(0, str(ROOT.parent / 'ZTE-Axon-M-Flash-Tool/scripts'))
+from fujisan_image import BootImage, cpio_entries, gzip_member, patch_adb_only, report, sign_image
+
+SOURCES = {
+    'reader-3.2.3-boot.img': '76990c6f20c61a919629600c9afbb4551e0792e911f05034927852c9fcdefe28',
+    'reader-3.2.3-recovery-control.img': '6850d87358bb4d46861b83a4c9f88b0fe57e41e6aa0f542e0e615e1b90bcf56b',
+    'test-07-early-blue-led-boot.img': '10eae36d5ede339594318203add501086d1956f9b818e779426873fa07ab1efe',
+    'twrp-3.7.0-att-logged-recovery.img': '7a80f52acfd8a522c30402dcca677fcb7673970ed5b68a5c6e9308c322a97dc5',
+    'twrp-3.7.0-att-charger-boot.img': '32804ee3cffe4fe1d23dbfa7ac204b4522b0f906579754a8ea37eed34cc5a522',
+}
+
+
+def sha(data):
+    return hashlib.sha256(data).hexdigest()
+
+
+def main():
+    os.umask(0o077)
+    summaries = []
+    for name, expected in SOURCES.items():
+        source = ROOT / 'prepared' / name
+        output = source.with_name(source.stem + '-adb-only.img')
+        validation = output.with_suffix('.validation.json')
+        inspection = output.with_suffix('.img.json')
+        if any(p.exists() for p in (output, validation, inspection)):
+            raise FileExistsError('Refusing to replace a previous candidate: ' + output.name)
+        data = source.read_bytes()
+        if sha(data) != expected:
+            raise ValueError('Unexpected input image: ' + name)
+        old = BootImage(data)
+        original_info = report(data)
+        ramdisk = patch_adb_only(old.ramdisk)
+        before = {x[0]: x for x in cpio_entries(gzip_member(old.ramdisk)[1])}
+        after_raw = gzip_member(ramdisk)[1]
+        after = {x[0]: x for x in cpio_entries(after_raw)}
+        if before.keys() != after.keys():
+            raise ValueError('USB patch changed archive entries')
+        changed = [name for name in before if before[name] != after[name]]
+        if {name.removeprefix('./') for name in changed} != {'prop.default', 'init.recovery.usb.rc'}:
+            raise ValueError('Unexpected ramdisk file changes')
+        if patch_adb_only(ramdisk) != ramdisk:
+            raise ValueError('ADB-only policy is not stable on reinspection')
+        checked = subprocess.run(['/usr/bin/cpio', '-it'], input=after_raw, capture_output=True)
+        if checked.returncode:
+            raise ValueError('External CPIO rejected updated ramdisk')
+        signed = sign_image(old.rebuild(ramdisk=ramdisk), original_info['signature_target'],
+                            ROOT / 'keys/axon-m-local.key', ROOT / 'keys/axon-m-local.pem')
+        new = BootImage(signed)
+        info = report(signed)
+        if (new.kernel != old.kernel or new.cmdline != old.cmdline or new.second != old.second
+                or old.rebuild(ramdisk=new.ramdisk) != new.payload
+                or not info['signature_verified'] or not info['boot_id_valid']):
+            raise ValueError('Unexpected non-ramdisk change or invalid image')
+        padded = signed + b'\0' * (-len(signed) % 512)
+        result = {'source_image': source.name, 'source_sha256': expected,
+                  'image': output.name, 'image_bytes': len(signed), 'image_sha256': sha(signed),
+                  'padded_bytes': len(padded), 'padded_sha256': sha(padded),
+                  'signature_target': info['signature_target'], 'signature_verified': True,
+                  'boot_id_valid': True, 'kernel_and_dtbs_unchanged': True,
+                  'cmdline_and_load_addresses_unchanged': True,
+                  'changed_ramdisk_files': changed,
+                  'all_other_encoded_cpio_entries_unchanged': True,
+                  'charger_and_functionfs_mount_unchanged': True,
+                  'adb_only_patch_idempotent': True, 'external_cpio_valid': True,
+                  'mtp_boot_default_disabled': True, 'hardware_tested': False}
+        with output.open('xb') as stream:
+            stream.write(signed)
+        for path, obj in ((validation, result), (inspection, info)):
+            with path.open('x') as stream:
+                json.dump(obj, stream, indent=2)
+                stream.write('\n')
+        summaries.append(result)
+        print(json.dumps(result), flush=True)
+    with (ROOT / 'adb-only-candidates.json').open('x') as stream:
+        json.dump(summaries, stream, indent=2)
+        stream.write('\n')
+
+
+if __name__ == '__main__':
+    main()
