@@ -1,0 +1,21 @@
+{
+  "passed": true,
+  "runner_sha256": "a36e613b2c2de994175000a6e6612c74a7ca02bf6a1f3b5524310ad24e8a9e76",
+  "tests_sha256": "aa5697c2a90afb38ce8eccca1bbf8dcb45a5fae37bb167001c327a42f7a4a30b",
+  "test_count": 10,
+  "command": "PYTHONDONTWRITEBYTECODE=1 python3 test_test24_recovery_adb.py -v",
+  "default_files_only_preflight_passed": true,
+  "expected_full_recovery_sha256": "52d50365ec73d60af80e235b776069fe5f2b85338a68126c2c0ea00f103170d9",
+  "scope": [
+    "full nonzero-tail preservation",
+    "mutated image/baseline/manifest rejection",
+    "single p19 write only",
+    "shell hash injection rejection",
+    "execute gate",
+    "no repeated write",
+    "self-SHA review gate",
+    "both-host receipt binding",
+    "no-clobber"
+  ],
+  "phone_operations": false
+}

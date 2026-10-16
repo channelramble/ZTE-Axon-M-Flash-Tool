@@ -1,0 +1,31 @@
+{
+  "author_validation": true,
+  "independent_review": false,
+  "script_sha256": "5392afda9f3fb17507017ac1e52707253e1aca8a5c9354be86e1dc665e04e26d",
+  "shell_syntax_passed": true,
+  "checks": [
+    {
+      "check": "failed final query",
+      "exit": 90,
+      "backing_preserved": true
+    },
+    {
+      "check": "timed-out final query",
+      "exit": 90,
+      "backing_preserved": true
+    },
+    {
+      "check": "failed autoclear query",
+      "exit": 86,
+      "backing_preserved": true
+    },
+    {
+      "check": "known detached cleanup",
+      "exit": 0,
+      "backing_preserved": false
+    }
+  ],
+  "mock_only": true,
+  "phone_operations": false,
+  "actual_loop_commands": false
+}

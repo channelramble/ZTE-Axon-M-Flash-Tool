@@ -1,0 +1,290 @@
+#!/usr/bin/env python3
+"""Prepare a local recovery-only candidate. Never open adb, SSH or a device.
+
+Native operation arguments and existing data/cache mounts are restored. This
+does not execute a wipe, update, mount, reset or package installation.
+"""
+from pathlib import Path
+import argparse
+import base64
+import gzip
+import hashlib
+import json
+import os
+import re
+import subprocess
+import sys
+
+ROOT = Path(__file__).resolve().parent
+sys.path.insert(0, str(ROOT.parent / 'ZTE-Axon-M-Flash-Tool/scripts'))
+from fujisan_image import BootImage, cpio_entries, gzip_member, report, sign_image
+
+SOURCE = ROOT / 'test20-boot-v1/recovery-control.img'
+SOURCE_SHA = '1a0c052cbc5561c50bd4dc9fde6d36573bda8beb04e5b5574e04c8a5fe9f6a9f'
+PUBLISHED = ROOT / 'recovery-lineage-23.2-20261006-UNOFFICIAL-fujisan.img'
+PUBLISHED_SHA = '5d76032e77d24a364bfd733369470abd516c198e8217c590d286dc16ab527a5a'
+CPIO_SHA = 'be30850f2a904535803d21366e226a5ebcdd0358f1430829c7082d494f1b96d2'
+KERNEL_SHA = 'a5da9953d5ed4fe6c5dae8432cf026b2bf0f11e6a27488181a1bc46a46016c03'
+INIT = 'system/etc/init/hw/init.rc'
+FSTAB = 'system/etc/recovery.fstab'
+ENTRY_PINS = {
+    INIT: '0612e3482087d2988334415dc20b5e092ed9732a368f04fb59b4d1edb98aab83',
+    FSTAB: '5f260878b7d892e57b92fbc90e63cd84d9c3165265c6b856e6c39c089949470a',
+}
+PUBLISHED_FSTAB_SHA = '2bdae3e1c77120b9cfab9ea6f2ead22ffade5c0b9970bf3ac524215e7f623a9a'
+EVIDENCE = ROOT / 'hardware-tests/test24-recovery-preflight-v1'
+EVIDENCE_SHA = '791ee2d3e35015dcbebab3e0593771c8409e7d6f74ef651845e8b3caa0a06371'
+OUT = ROOT / 'prepared/test24-usable-recovery-v1'
+VOLUMES = {
+    'cache': {'mountpoint': '/cache', 'node': '/dev/block/mmcblk0p36',
+              'start': 15204376, 'sectors': 3356672, 'dev': '259:4', 'type': 'ext4'},
+    'userdata': {'mountpoint': '/data', 'node': '/dev/block/mmcblk0p48',
+                 'start': 19083264, 'sectors': 103059423, 'dev': '259:16', 'type': 'f2fs'},
+    'system': {'mountpoint': '/system', 'node': '/dev/block/mmcblk0p20',
+               'start': 1312768, 'sectors': 13631488, 'dev': '179:20', 'type': 'ext4'},
+}
+
+
+def sha(data):
+    return hashlib.sha256(data).hexdigest()
+
+
+def require(condition, message):
+    if not condition:
+        raise ValueError(message)
+
+
+def pinned(path, expected):
+    require(path.is_file() and not path.is_symlink(), 'Missing regular input: ' + path.name)
+    data = path.read_bytes()
+    require(sha(data) == expected, 'Input identity differs: ' + path.name)
+    return data
+
+
+def verify_preflight():
+    raw = pinned(EVIDENCE / 'capture.json', EVIDENCE_SHA)
+    capture = json.loads(raw)
+    require(capture['complete'] and capture['read_only'], 'Preflight capture incomplete')
+    require(set(capture['files']) == {'mounts-and-space.txt', 'volume-identities.txt',
+                                     'pending-commands.txt'}, 'Unexpected preflight file set')
+    contents = {}
+    for name, row in capture['files'].items():
+        require(row['status'] == 'ok' and row['framed'] and
+                row['remote_rc'] == row['adb_rc'] == 0, 'Failed preflight capture: ' + name)
+        content = pinned(EVIDENCE / name, row['sha256'])
+        require(len(content) == row['bytes'], 'Wrong preflight length: ' + name)
+        contents[name] = content.decode()
+    lines = contents['volume-identities.txt'].splitlines()
+    require(len(lines) == 21, 'Unexpected volume identity layout')
+    for index, (name, expected) in enumerate(VOLUMES.items()):
+        section = lines[index * 7:(index + 1) * 7]
+        require(section[:6] == ['NAME=' + name, expected['node'], expected['node'],
+                               str(expected['start']), str(expected['sectors']), expected['dev']],
+                'Platform/bootdevice aliases or geometry changed: ' + name)
+        require(section[6].startswith(expected['node'] + ': ') and
+                'TYPE="' + expected['type'] + '"' in section[6] and
+                'UUID="REDACTED"' in section[6], 'Filesystem type differs: ' + name)
+    pending = contents['pending-commands.txt'].splitlines()
+    require(pending[0] == 'cache_recovery_command_absent', 'Pending cache recovery command')
+    bcb = base64.b64decode(''.join(pending[1:]), validate=True)
+    require(len(bcb) == 2048 and not any(bcb), 'Pending bootloader message')
+    for name in ('cache', 'userdata'):
+        v = VOLUMES[name]
+        matches = [line.split() for line in contents['mounts-and-space.txt'].splitlines()
+                   if len(line.split()) == 6 and line.split()[1] == v['mountpoint']]
+        require(len(matches) == 1 and matches[0][:3] ==
+                [v['node'], v['mountpoint'], v['type']], 'Current filesystem mount differs: ' + name)
+    return {'capture_sha256': EVIDENCE_SHA,
+            'files': {n: {'bytes': r['bytes'], 'sha256': r['sha256']}
+                      for n, r in capture['files'].items()},
+            'platform_and_bootdevice_aliases_match_fixed_nodes': True,
+            'geometry_and_types': VOLUMES, 'bcb_first_2048_zero': True,
+            'cache_recovery_command_absent': True,
+            'fresh_recheck_required_before_first_boot': True}
+
+
+def encode(name, fields, content, magic):
+    fields = list(fields)
+    fields[6] = len(content)
+    if magic == b'070702':
+        fields[12] = sum(content) & 0xffffffff
+    header = magic + ''.join(f'{value:08x}' for value in fields).encode() + name.encode() + b'\0'
+    result = header + b'\0' * (-len(header) % 4) + content
+    return result + b'\0' * (-len(result) % 4)
+
+
+def transform_cpio(raw, published_fstab):
+    require(sha(raw) == CPIO_SHA, 'Wrong source ramdisk')
+    require(sha(published_fstab) == PUBLISHED_FSTAB_SHA, 'Wrong published fstab')
+    entries = cpio_entries(raw)
+    require(len(entries) == 595 and len({e[0] for e in entries}) == 595,
+            'Unexpected source archive inventory')
+    by_name = {e[0]: e for e in entries}
+    for name, expected in ENTRY_PINS.items():
+        require(sha(by_name[name][2]) == expected and by_name[name][1][1] == 0o100644
+                and by_name[name][1][4] == 1, 'Wrong source entry: ' + name)
+    init = by_name[INIT][2]
+    forced = b'service recovery /system/bin/recovery --show_text --reason=axon-diag-test19\n'
+    native = b'service recovery /system/bin/recovery\n'
+    require(init.count(forced) == 1 and native not in init, 'Unexpected recovery invocation')
+    init = init.replace(forced, native, 1)
+    persist_start = b'    start axon-diag-persist\n'
+    require(init.count(persist_start) == 1 and
+            b'service axon-diag-persist /system/bin/sh /system/bin/axon-diag-persist.sh\n    disabled\n' in init,
+            'Unexpected private cache persister startup')
+    # The previous persister leaves a second rw cache mount even after exit.
+    # Native recovery now owns /cache, including its unmount-before-format path.
+    init = init.replace(persist_start,
+        b'    # Test24: native recovery owns /cache; private cache persister stays disabled.\n', 1)
+    require(b'    start axon-diag-collect\n' in init and persist_start not in init,
+            'RAM collector or persister state differs')
+    for n, fields, content, encoded in entries:
+        if n.endswith('.rc') and n != INIT:
+            require(b'axon-diag-persist' not in content, 'Additional cache persister trigger')
+    fstab = by_name[FSTAB][2]
+    restored_rows = {}
+    for name in ('cache', 'userdata'):
+        mountpoint = VOLUMES[name]['mountpoint']
+        rows = [line for line in published_fstab.splitlines(keepends=True)
+                if line.split() and not line.lstrip().startswith(b'#')
+                and line.split()[1] == mountpoint.encode()]
+        require(len(rows) == 1, 'Missing unique native filesystem row: ' + name)
+        original = rows[0]
+        fields = original.split()
+        alias = '/dev/block/platform/soc/7464900.sdhci/by-name/' + name
+        require(len(fields) == 5 and fields[:3] ==
+                [alias.encode(), mountpoint.encode(), VOLUMES[name]['type'].encode()],
+                'Native filesystem identity differs: ' + name)
+        require(not any(flag in original for flag in (b'forceencrypt', b'encryptable',
+                b'fileencryption', b'metadata_encryption', b'keydirectory', b' avb', b' verify')),
+                'Unexpected encryption or verification policy')
+        # Keep the original device, filesystem and mount options. Recovery does
+        # not need Android first/late-stage quota/check/auto-format policy.
+        restored = re.sub(rb'\S+(\r?\n)$', rb'wait\1', original)
+        require(restored != original and restored.split() == fields[:4] + [b'wait'],
+                'Unexpected native filesystem field layout')
+        omitted = ('# Test19 diagnostic omits automatic ' + mountpoint + ' access.\n').encode()
+        require(fstab.count(omitted) == 1, 'Missing diagnostic omission: ' + name)
+        fstab = fstab.replace(omitted, restored, 1)
+        restored_rows[name] = {'original': original.decode().rstrip(),
+                               'candidate': restored.decode().rstrip()}
+    active = [line.split() for line in fstab.splitlines()
+              if line.split() and not line.lstrip().startswith(b'#')]
+    require(not any(row[1] in (b'/persist', b'/dcmlog') for row in active),
+            'Isolated persistent filesystem was reintroduced')
+    changes = {INIT: init, FSTAB: fstab}
+    packed = b''.join(encode(n, f, changes[n], e[:6]) if n in changes else e
+                      for n, f, c, e in entries)
+    packed += b'\0' * (-len(packed) % 512)
+    revised = cpio_entries(packed)
+    require(len(revised) == len(entries), 'Archive count changed')
+    changed = []
+    for before, after in zip(entries, revised):
+        n, fields, content, encoded = before
+        require(n == after[0], 'Archive order changed')
+        if n not in changes:
+            require(before == after, 'Unrelated encoded archive member changed: ' + n)
+            continue
+        metadata = list(fields)
+        metadata[6] = len(changes[n])
+        if encoded[:6] == b'070702':
+            metadata[12] = sum(changes[n]) & 0xffffffff
+        require(after[1] == metadata and after[2] == changes[n], 'Entry metadata changed: ' + n)
+        changed.append({'path': n, 'source_sha256': sha(content),
+                        'output_sha256': sha(after[2]), 'source_bytes': len(content),
+                        'output_bytes': len(after[2]), 'metadata_preserved_except_content_size': True})
+    require({entry['path'] for entry in changed} == {INIT, FSTAB}, 'Wrong changed entries')
+    return packed, changes, changed, restored_rows
+
+
+def prepare():
+    preflight = verify_preflight()
+    source = pinned(SOURCE, SOURCE_SHA)
+    source_info = report(source)
+    require(source_info['signature_verified'] and source_info['boot_id_valid'] and
+            source_info['signature_target'] == '/recovery', 'Source recovery signature is invalid')
+    original = BootImage(source)
+    require(sha(original.kernel) == KERNEL_SHA, 'Source proven kernel/DT differs')
+    _, raw, tail = gzip_member(original.ramdisk)
+    require(not tail, 'Ramdisk has trailing data')
+    published_data = pinned(PUBLISHED, PUBLISHED_SHA)
+    published_info = report(published_data)
+    require(published_info['signature_verified'] and published_info['boot_id_valid'],
+            'Published source signature invalid')
+    _, pubraw, pubtail = gzip_member(BootImage(published_data).ramdisk)
+    require(not pubtail, 'Published ramdisk has trailing data')
+    published_fstab = dict((n, c) for n, f, c, e in cpio_entries(pubraw))[FSTAB]
+    cpio, changes, entries, rows = transform_cpio(raw, published_fstab)
+    result = subprocess.run(['/usr/bin/cpio', '-it'], input=cpio, capture_output=True)
+    require(result.returncode == 0, 'External cpio rejected archive')
+    ramdisk = gzip.compress(cpio, compresslevel=9, mtime=0)
+    payload = original.rebuild(ramdisk=ramdisk)
+    candidate = sign_image(payload, '/recovery', str(ROOT / 'keys/axon-m-local.key'),
+                           str(ROOT / 'keys/axon-m-local.pem'))
+    output = BootImage(candidate)
+    info = report(candidate)
+    require(info['signature_verified'] and info['boot_id_valid'] and
+            info['signature_target'] == '/recovery', 'Output signature is invalid')
+    require(output.payload == payload and output.kernel == original.kernel and
+            output.cmdline == original.cmdline and output.second == original.second and
+            output.ramdisk == ramdisk, 'Unrelated boot payload changed')
+    require(original.rebuild(ramdisk=output.ramdisk) == output.payload,
+            'Unexpected header/load address change')
+    require(len(candidate) == output.payload_length + info['signature_bytes'],
+            'Unexpected data after signature')
+    padded = candidate + b'\0' * (-len(candidate) % 512)
+    manifest = {
+        'passed': True, 'source_image_sha256': SOURCE_SHA,
+        'source_image_bytes': len(source), 'published_image_sha256': PUBLISHED_SHA,
+        'image_sha256': sha(candidate), 'image_bytes': len(candidate),
+        'padded_sha256': sha(padded), 'padded_bytes': len(padded), 'target': '/recovery',
+        'kernel_and_dt_component_sha256': KERNEL_SHA, 'kernel_dt_cmdline_second_unchanged': True,
+        'load_addresses_and_non_size_header_fields_preserved': True,
+        'signature_verified': True, 'boot_id_valid': True,
+        'source_cpio_sha256': CPIO_SHA, 'output_cpio_sha256': sha(cpio),
+        'cpio_entries': 595, 'changed_entries': entries,
+        'all_other_encoded_cpio_entries_exact': True, 'restored_filesystem_rows': rows,
+        'native_recovery_invocation_restored': True, 'usb_root_selinux_native_binaries_unchanged': True,
+        'private_cache_persister_start_removed': True, 'ram_collector_unchanged': True,
+        'persist_dcmlog_still_omitted': True, 'automatic_format_check_quota_encryption_flags_absent': True,
+        'preflight': preflight, 'phone_operations': False, 'hardware_tested': False,
+        'operation': 'Restore native recovery arguments and existing cache/data mounting for recovery use.',
+        'limits': [
+            'Independent final artifact review and fresh clear BCB/absent cache command check are required before first boot.',
+            'Mounting cache permits normal recovery log writes; installing packages and wiping remain separate explicit operations.',
+            'Wait-only fs_mgr flags remove explicit check/format/quota policy; native filesystem safety checks and journal replay can still occur during a requested mount.',
+            'Native recovery factory-reset formatter may request F2FS project_quota,extra_attr independently of fstab flags; compatibility requires separate verification.',
+            'No GApps package has been installed or its resulting system image validated by this builder.',
+            'Diagnostic root adb and permissive SELinux are intentionally preserved; this is not a production security repair.',
+            'The Test19 RAM collector is unchanged; private cache persister is no longer started. Old cache logger output must not be mistaken for this boot.',
+        ],
+    }
+    return candidate, cpio, changes, manifest, info
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--build', action='store_true', help='Write a new local immutable candidate directory')
+    args = parser.parse_args()
+    if args.build:
+        require(not OUT.exists() and not OUT.is_symlink(), 'Output already exists; no overwrite')
+    candidate, cpio, changes, manifest, info = prepare()
+    if args.build:
+        os.umask(0o077)
+        OUT.mkdir(mode=0o700, exist_ok=False)
+        blobs = {'recovery.img': candidate, 'ramdisk.cpio': cpio,
+                 'init.rc': changes[INIT], 'recovery.fstab': changes[FSTAB],
+                 'manifest.json': (json.dumps(manifest, indent=2) + '\n').encode(),
+                 'image-report.json': (json.dumps(info, indent=2) + '\n').encode()}
+        for name, data in blobs.items():
+            with (OUT / name).open('xb') as stream:
+                stream.write(data)
+                stream.flush()
+                os.fsync(stream.fileno())
+            require((OUT / name).read_bytes() == data, 'Local output readback differs')
+    print(json.dumps({k: manifest[k] for k in ('passed', 'image_sha256', 'image_bytes',
+                     'padded_sha256', 'padded_bytes', 'target', 'hardware_tested')}, indent=2))
+
+
+if __name__ == '__main__':
+    main()

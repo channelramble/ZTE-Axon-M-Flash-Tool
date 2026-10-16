@@ -1,0 +1,23 @@
+{
+  "author_validation": true,
+  "independent_review": false,
+  "builder_sha256": "fcd074ac517d0524f9aeb1613839be9f0dbde9117b7cd1d4df6a74d4437ae6c0",
+  "image_sha256": "cb56783c82110e2bc6a9356999f7e4197a5cb56167087dc06e8b9cfc955d43e5",
+  "manifest_sha256": "fd3be4351829e3b20ed0d0b9a1956aba62d983144c51674448065edb0cac8a75",
+  "scratch_script_sha256": "5392afda9f3fb17507017ac1e52707253e1aca8a5c9354be86e1dc665e04e26d",
+  "checks": [
+    "modified source cpio rejected",
+    "modified published fstab rejected",
+    "existing immutable output rejected before rebuild; all artifacts unchanged",
+    "RAM checker shell syntax passed",
+    "RAM checker has no eMMC partition path and exactly fixed scratch target",
+    "native make_f2fs flags match independently decoded recovery argv"
+  ],
+  "phone_operations": false,
+  "scratch_executed": false,
+  "limitations": [
+    "RAM capability check is not a full factory reset or a package-install test.",
+    "Native filesystem safety checks and journal replay remain enabled.",
+    "A D-state operation may outlive timeout; stop and inspect exclusive scratch resources if cleanup marker is absent."
+  ]
+}

@@ -1,0 +1,14 @@
+from pathlib import Path
+import time,json,os
+from capture_test22_adb import ADB,PORT,ROOT,Capture,bounded_process,identity_command,verify_identity,write_text_capture,save_state
+os.umask(0o077)
+out=ROOT/'test24-recovery-preflight-v1';out.mkdir(exist_ok=False)
+state={'files':{},'read_only':True,'complete':False};save_state(out,state)
+raw,rc,status=bounded_process([str(ADB),'-P',PORT,'devices'],10,65536)
+rows=[x.split() for x in raw.decode().splitlines()[1:] if len(x.split())>=2]
+assert len(rows)==1 and rows[0][1]=='device'
+c=Capture(rows[0][0],time.monotonic()+180)
+b,info=c.remote(identity_command(),4096,10);assert verify_identity(b,info)
+commands=[('mounts-and-space.txt', 'cat /proc/mounts; head -8 /proc/meminfo; df -k /dev /data /cache /system', 32768, 10), ('volume-identities.txt', 'for spec in cache:36 userdata:48 system:20; do oldIFS=$IFS; IFS=:; set -- $spec; IFS=$oldIFS; n=/dev/block/mmcblk0p$2; echo NAME=$1; readlink -f /dev/block/platform/soc/7464900.sdhci/by-name/$1; readlink -f /dev/block/bootdevice/by-name/$1; cat /sys/class/block/mmcblk0p$2/start /sys/class/block/mmcblk0p$2/size /sys/class/block/mmcblk0p$2/dev; blkid $n | sed -E \'s/UUID="[^"]*"/UUID="REDACTED"/g\'; done', 16384, 10), ('pending-commands.txt', 'if [ -e /cache/recovery/command ]; then ls -l /cache/recovery/command; head -c 8192 /cache/recovery/command; else echo cache_recovery_command_absent; fi; dd if=/dev/block/mmcblk0p38 bs=2048 count=1 2>/dev/null | base64', 16384, 10)]
+for name,command,cap,seconds in commands:write_text_capture(c,out,state,name,command,cap,seconds)
+state['complete']=True;save_state(out,state);print('Read-only boot routing capture complete',flush=True)

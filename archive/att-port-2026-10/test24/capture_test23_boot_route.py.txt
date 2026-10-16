@@ -1,0 +1,22 @@
+from pathlib import Path
+import time,json,os
+from capture_test22_adb import ADB,PORT,ROOT,Capture,bounded_process,identity_command,verify_identity,write_text_capture,save_state
+os.umask(0o077)
+out=ROOT/'test23-boot-route-v1';out.mkdir(exist_ok=False)
+state={'files':{},'read_only':True,'complete':False};save_state(out,state)
+raw,rc,status=bounded_process([str(ADB),'-P',PORT,'devices'],10,65536)
+rows=[x.split() for x in raw.decode().splitlines()[1:] if len(x.split())>=2]
+assert len(rows)==1 and rows[0][1]=='device'
+c=Capture(rows[0][0],time.monotonic()+180)
+b,info=c.remote(identity_command(),4096,10);assert verify_identity(b,info)
+commands=[
+('boot-reasons.txt', 'for p in ro.bootmode ro.boot.bootreason ro.boot.mode ro.boot.reboot_mode ro.boot.slot_suffix sys.boot.reason sys.boot.reason.last persist.sys.boot.reason persist.sys.boot.reason.history sys.boot_completed init.svc.recovery init.svc.bootanim; do echo "$p=$(getprop $p)"; done; cat /proc/uptime; tr " " "\n" < /proc/cmdline | grep -Ei "^androidboot\.(mode|bootreason|reboot_mode|slot_suffix)=|^boot(reason|mode)="; true', 16384, 8),
+('boot-recovery-misc-hashes.txt', 'set -e; for spec in 18:1050624:131072:179:18 19:1181696:131072:179:19 38:18626584:2048:259:6; do oldIFS=$IFS; IFS=:; set -- $spec; IFS=$oldIFS; n=/dev/block/mmcblk0p$1; s=/sys/class/block/mmcblk0p$1; [ -b "$n" ]; [ "$(cat $s/start)" = "$2" ]; [ "$(cat $s/size)" = "$3" ]; [ "$(cat $s/dev)" = "$4:$5" ]; [ "$(blockdev --getsize64 $n)" = "$(( $3 * 512 ))" ]; sha256sum "$n"; done', 8192, 25),
+('bcb-first2k.txt', 'set -e; [ "$(cat /sys/class/block/mmcblk0p38/start)" = 18626584 ]; [ "$(blockdev --getsize64 /dev/block/mmcblk0p38)" = 1048576 ]; dd if=/dev/block/mmcblk0p38 bs=2048 count=1 2>/dev/null | base64', 8192, 8),
+('recovery-log-index.txt', 'ls -l /cache/recovery /data/misc/recovery /sys/fs/pstore 2>/dev/null; true', 16384, 8),
+('last-recovery-log.txt', 'for f in /cache/recovery/last_log /cache/recovery/log /cache/recovery/last_install /cache/recovery/command /data/misc/recovery/last_log; do if [ -f "$f" ]; then echo "FILE=$f"; head -c 131072 "$f"; fi; done', 524288, 15),
+('bootstat-events.txt', 'ls -l /data/misc/bootstat 2>/dev/null; logcat -b events -d -t 800 boot_progress_start:I system_server_start:I boot_progress_enable_screen:I watchdog:I "*:S"', 32768, 10),
+('recovery-install-policy.txt', 'ls -l /system/bin/install-recovery.sh /system/etc/install-recovery.sh /vendor/bin/install-recovery.sh /system/recovery-from-boot.p /system/vendor/recovery-from-boot.p 2>/dev/null; grep -n -E "flash_recovery|install-recovery|reboot|boot-recovery" /system/etc/init/fujisan.rc /vendor/etc/init/zz-fujisan-charger.rc /system/etc/init/hw/init.rc; true',32768,10)
+]
+for name,command,cap,seconds in commands:write_text_capture(c,out,state,name,command,cap,seconds)
+state['complete']=True;save_state(out,state);print('Read-only boot routing capture complete',flush=True)

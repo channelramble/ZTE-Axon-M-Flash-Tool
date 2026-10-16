@@ -1,0 +1,136 @@
+#!/usr/bin/env python3
+"""Focused offline Test24 writer gates. No adb/device operations."""
+import argparse
+import copy
+import importlib.util
+import json
+from pathlib import Path
+import tempfile
+import unittest
+from unittest.mock import patch
+
+ROOT = Path(__file__).resolve().parent
+spec = importlib.util.spec_from_file_location('test24_writer', ROOT / 'install_test24_recovery_adb.py')
+w = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(w)
+
+
+class Test24Gates(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.candidate = ROOT / 'prepared/test24-usable-recovery-v1'
+        cls.baseline = ROOT / 'hardware-tests/test23-edl-before/recovery.bin'
+        cls.full = w.load_inputs(cls.candidate, cls.baseline)
+        cls.full_sha = w.sha(cls.full)
+
+    def test_full_tail_preserved_and_exact_pin(self):
+        before = self.baseline.read_bytes()
+        self.assertEqual(self.full_sha, '52d50365ec73d60af80e235b776069fe5f2b85338a68126c2c0ea00f103170d9')
+        self.assertEqual(len(self.full), 67108864)
+        self.assertTrue(any(before[w.PADDED_BYTES:]))
+        self.assertEqual(self.full[w.PADDED_BYTES:], before[w.PADDED_BYTES:])
+        self.assertEqual(self.full[:w.IMAGE_BYTES], (self.candidate / 'recovery.img').read_bytes())
+
+    def test_changed_candidate_rejected(self):
+        original = w.regular
+        def changed(path):
+            data = original(path)
+            return bytes([data[0] ^ 1]) + data[1:] if path.name == 'recovery.img' else data
+        with patch.object(w, 'regular', side_effect=changed), self.assertRaises(ValueError):
+            w.load_inputs(self.candidate, self.baseline)
+
+    def test_changed_baseline_tail_rejected(self):
+        original = w.regular
+        def changed(path):
+            data = original(path)
+            return data[:-1] + bytes([data[-1] ^ 1]) if path == self.baseline else data
+        with patch.object(w, 'regular', side_effect=changed), self.assertRaises(ValueError):
+            w.load_inputs(self.candidate, self.baseline)
+
+    def test_changed_manifest_rejected(self):
+        original = w.regular
+        with patch.object(w, 'regular', side_effect=lambda p: original(p) + b' ' if p.name == 'manifest.json' else original(p)):
+            with self.assertRaises(ValueError):
+                w.load_inputs(self.candidate, self.baseline)
+
+    def test_single_fixed_write_and_shell_hash_guards(self):
+        command = w.write_command('/dev/axon-test24-recovery-' + 'a' * 24 + '/candidate-full.bin',
+                                  self.full_sha, 'b' * 64)
+        self.assertEqual(command.count(' of='), 1)
+        self.assertIn('of=/dev/block/mmcblk0p19 bs=4096 count=16384 conv=notrunc,fsync', command)
+        self.assertNotIn('reboot', command)
+        self.assertLess(command.index('/cache/recovery/command'), command.index(' of='))
+        self.assertLess(command.index(w.PARTS['recovery'][4]), command.index(' of='))
+        for bad in ('', 'A' * 64, '0;touch /tmp/not-permitted', '1' * 63):
+            with self.assertRaises(ValueError):
+                w.write_command('/dev/axon-test24-recovery-' + 'a' * 24 + '/candidate-full.bin', bad, 'b' * 64)
+            with self.assertRaises(ValueError):
+                w.write_command('/dev/axon-test24-recovery-' + 'a' * 24 + '/candidate-full.bin', self.full_sha, bad)
+
+    def test_no_execute_refuses_before_connect(self):
+        args = argparse.Namespace(output_dir=Path('/unused') / w.OUTPUT_NAME, phase='backup', execute=False)
+        with patch.object(w, 'connect') as connect, self.assertRaises(ValueError):
+            w.run_phase(args, self.full)
+        connect.assert_not_called()
+
+    def test_attempted_write_cannot_repeat(self):
+        args = argparse.Namespace(output_dir=Path('/unused') / w.OUTPUT_NAME, phase='write', execute=True,
+                                  review=Path('/review'), writer_review=Path('/writer-review'))
+        state = {'phase': 'write_started', 'write_started': True}
+        with patch.object(w, 'load_state', return_value=state), \
+             patch.object(w, 'require_receipt', return_value='receipt'), \
+             patch.object(w, 'verify_review', return_value='review'), \
+             patch.object(w, 'verify_writer_review', return_value='writer-review'), \
+             patch.object(w, 'regular', return_value=self.full), \
+             patch.object(w, 'connect') as connect, self.assertRaises(ValueError):
+            w.run_phase(args, self.full)
+        connect.assert_not_called()
+
+    def test_writer_review_bound_to_current_bytes(self):
+        good = {'passed': True, 'runner_sha256': w.sha(Path(w.__file__).read_bytes())}
+        with patch.object(w, 'regular', return_value=json.dumps(good).encode()):
+            w.verify_writer_review(Path('/unused'))
+        for bad in ({**good, 'passed': False}, {**good, 'runner_sha256': '0' * 64}):
+            with patch.object(w, 'regular', return_value=json.dumps(bad).encode()), self.assertRaises(ValueError):
+                w.verify_writer_review(Path('/unused'))
+
+    def test_receipt_pins_manifest_host_and_contents(self):
+        expected = w.expected_files(self.full_sha, False)
+        manifest = {'phase': 'before', 'files': expected, 'candidate_sha256': w.IMAGE_SHA,
+                    'expected_full_recovery_sha256': self.full_sha, 'origin_host_sha256': '1' * 64}
+        raw = json.dumps(manifest).encode()
+        receipt = {'complete': True, 'both_macs_verified': True, 'phase': 'before',
+                   'manifest_sha256': w.sha(raw), 'candidate_sha256': w.IMAGE_SHA,
+                   'expected_full_recovery_sha256': self.full_sha, 'files': expected,
+                   'origin_host_sha256': '1' * 64, 'verifier_host_sha256': '2' * 64}
+        def run(item):
+            with patch.object(w, 'regular', side_effect=lambda p: raw if p.name == 'manifest.json' else json.dumps(item).encode()), \
+                 patch.object(w, 'validate_snapshot', return_value=expected):
+                return w.require_receipt(Path('/unused'), self.full_sha, False)
+        run(receipt)
+        for field, value in [('complete', False), ('both_macs_verified', False),
+                             ('manifest_sha256', '0' * 64), ('verifier_host_sha256', '1' * 64),
+                             ('candidate_sha256', '0' * 64), ('phase', 'after')]:
+            bad = copy.deepcopy(receipt); bad[field] = value
+            with self.assertRaises(ValueError):
+                run(bad)
+
+    def test_no_clobber_and_local_receipt_cannot_same_host(self):
+        with tempfile.TemporaryDirectory() as directory:
+            p = Path(directory) / 'proof'
+            w.new_file(p, b'first')
+            with self.assertRaises(FileExistsError):
+                w.new_file(p, b'second')
+            self.assertEqual(p.read_bytes(), b'first')
+        manifest = {'phase': 'before', 'files': w.expected_files(self.full_sha, False),
+                    'candidate_sha256': w.IMAGE_SHA, 'expected_full_recovery_sha256': self.full_sha,
+                    'origin_host_sha256': w.host_hash()}
+        with patch.object(w, 'regular', return_value=json.dumps(manifest).encode()), \
+             patch.object(w, 'validate_snapshot', return_value=manifest['files']), \
+             patch.object(w, 'new_file') as new, self.assertRaises(ValueError):
+            w.verify_copy(Path('/unused'), self.full_sha, False)
+        new.assert_not_called()
+
+
+if __name__ == '__main__':
+    unittest.main()

@@ -1,0 +1,113 @@
+{
+  "passed": true,
+  "source_image_sha256": "1a0c052cbc5561c50bd4dc9fde6d36573bda8beb04e5b5574e04c8a5fe9f6a9f",
+  "source_image_bytes": 26625079,
+  "published_image_sha256": "5d76032e77d24a364bfd733369470abd516c198e8217c590d286dc16ab527a5a",
+  "image_sha256": "cb56783c82110e2bc6a9356999f7e4197a5cb56167087dc06e8b9cfc955d43e5",
+  "image_bytes": 26625079,
+  "padded_sha256": "ed465040ef7ca9b22189f63aed47c45cd29039c9b5ca844a15d221d40bf64670",
+  "padded_bytes": 26625536,
+  "target": "/recovery",
+  "kernel_and_dt_component_sha256": "a5da9953d5ed4fe6c5dae8432cf026b2bf0f11e6a27488181a1bc46a46016c03",
+  "kernel_dt_cmdline_second_unchanged": true,
+  "load_addresses_and_non_size_header_fields_preserved": true,
+  "signature_verified": true,
+  "boot_id_valid": true,
+  "source_cpio_sha256": "be30850f2a904535803d21366e226a5ebcdd0358f1430829c7082d494f1b96d2",
+  "output_cpio_sha256": "b68b776636120a2dc56287243ce77b9163a457fdad0125c5aaf8b99ebf12e94e",
+  "cpio_entries": 595,
+  "changed_entries": [
+    {
+      "path": "system/etc/init/hw/init.rc",
+      "source_sha256": "0612e3482087d2988334415dc20b5e092ed9732a368f04fb59b4d1edb98aab83",
+      "output_sha256": "3f589eb1b50b408e6d20245da99ee789d20407d4398412af9965e90c1e01327e",
+      "source_bytes": 7975,
+      "output_bytes": 7992,
+      "metadata_preserved_except_content_size": true
+    },
+    {
+      "path": "system/etc/recovery.fstab",
+      "source_sha256": "5f260878b7d892e57b92fbc90e63cd84d9c3165265c6b856e6c39c089949470a",
+      "output_sha256": "697d1f6c7f9e90181aa67cb706cb00a50a69a202a835ccc3aee104cf16c1fafb",
+      "source_bytes": 2229,
+      "output_bytes": 2432,
+      "metadata_preserved_except_content_size": true
+    }
+  ],
+  "all_other_encoded_cpio_entries_exact": true,
+  "restored_filesystem_rows": {
+    "cache": {
+      "original": "/dev/block/platform/soc/7464900.sdhci/by-name/cache     /cache            ext4    noatime,nosuid,nodev,barrier=1                                   wait,formattable,check",
+      "candidate": "/dev/block/platform/soc/7464900.sdhci/by-name/cache     /cache            ext4    noatime,nosuid,nodev,barrier=1                                   wait"
+    },
+    "userdata": {
+      "original": "/dev/block/platform/soc/7464900.sdhci/by-name/userdata  /data             f2fs    noatime,nosuid,nodev,discard,resuid=1000,resgid=1000             latemount,wait,formattable,check,reservedsize=104857600,quota",
+      "candidate": "/dev/block/platform/soc/7464900.sdhci/by-name/userdata  /data             f2fs    noatime,nosuid,nodev,discard,resuid=1000,resgid=1000             wait"
+    }
+  },
+  "native_recovery_invocation_restored": true,
+  "usb_root_selinux_native_binaries_unchanged": true,
+  "private_cache_persister_start_removed": true,
+  "ram_collector_unchanged": true,
+  "persist_dcmlog_still_omitted": true,
+  "automatic_format_check_quota_encryption_flags_absent": true,
+  "preflight": {
+    "capture_sha256": "791ee2d3e35015dcbebab3e0593771c8409e7d6f74ef651845e8b3caa0a06371",
+    "files": {
+      "mounts-and-space.txt": {
+        "bytes": 17495,
+        "sha256": "4082954fb2f23ae8c86089b05d3104c7ddfce97fac7edd9b7891cb7fdc93b864"
+      },
+      "volume-identities.txt": {
+        "bytes": 408,
+        "sha256": "81d753d7c45c3eaca5eacca7e1d78fec07b3a58e2ac4fe8abf6a9d176d20b9cb"
+      },
+      "pending-commands.txt": {
+        "bytes": 2798,
+        "sha256": "046c8a903ac4484023183e81239ca0914e46aa02b4b7a1263cedecd9c7cd907b"
+      }
+    },
+    "platform_and_bootdevice_aliases_match_fixed_nodes": true,
+    "geometry_and_types": {
+      "cache": {
+        "mountpoint": "/cache",
+        "node": "/dev/block/mmcblk0p36",
+        "start": 15204376,
+        "sectors": 3356672,
+        "dev": "259:4",
+        "type": "ext4"
+      },
+      "userdata": {
+        "mountpoint": "/data",
+        "node": "/dev/block/mmcblk0p48",
+        "start": 19083264,
+        "sectors": 103059423,
+        "dev": "259:16",
+        "type": "f2fs"
+      },
+      "system": {
+        "mountpoint": "/system",
+        "node": "/dev/block/mmcblk0p20",
+        "start": 1312768,
+        "sectors": 13631488,
+        "dev": "179:20",
+        "type": "ext4"
+      }
+    },
+    "bcb_first_2048_zero": true,
+    "cache_recovery_command_absent": true,
+    "fresh_recheck_required_before_first_boot": true
+  },
+  "phone_operations": false,
+  "hardware_tested": false,
+  "operation": "Restore native recovery arguments and existing cache/data mounting for recovery use.",
+  "limits": [
+    "Independent final artifact review and fresh clear BCB/absent cache command check are required before first boot.",
+    "Mounting cache permits normal recovery log writes; installing packages and wiping remain separate explicit operations.",
+    "Wait-only fs_mgr flags remove explicit check/format/quota policy; native filesystem safety checks and journal replay can still occur during a requested mount.",
+    "Native recovery factory-reset formatter may request F2FS project_quota,extra_attr independently of fstab flags; compatibility requires separate verification.",
+    "No GApps package has been installed or its resulting system image validated by this builder.",
+    "Diagnostic root adb and permissive SELinux are intentionally preserved; this is not a production security repair.",
+    "The Test19 RAM collector is unchanged; private cache persister is no longer started. Old cache logger output must not be mistaken for this boot."
+  ]
+}

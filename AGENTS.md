@@ -3,19 +3,22 @@
 Notes for AI coding agents (and people) continuing the effort to run the unofficial **LineageOS 23.2 (Android 16)** ROM and **TWRP 3.7.0** on an **AT&T ZTE Axon M (Z999, `fujisan`)**. It collects everything verified so far (October 2026), what was ruled out, the tooling that worked, and the next steps.
 
 **Status: Test23 boots full Android; hardware validation remains unfinished.**
-- **Latest owner report:** bootloader-menu Recovery still fails; choosing normal
-  Start sometimes enters LOS recovery, whose Restart then reaches Android.
-  Investigate live boot reason/BCB and slot identity before claiming reliable
-  startup or rewriting either slot. The prior verified full-slot hashes remain
-  evidence of their contents at that time; they do not explain this new route.
+- **Latest investigation:** fresh slot hashes prove boot/recovery are not
+  swapped. Previous-boot pstore records an incoming BCB recovery request;
+  diagnostic CLI arguments suppressed the Settings factory-reset arguments.
+  Test24 restores native recovery argument handling and cache/data access;
+  it is flashed with full readback verified; its first boot is pending.
+  Menu/PMIC routing remains separate.
+  GApps is requested and staged; a fresh data-reset approval is pending.
+  See sections54–55 before any write or reset.
 - **Working recovery controls (October16): Test18 TWRP3.7 and Test19 LOS23.2**
   boot with adb on their own4.4 kernels. Test06 TWRP3.2.3/3.18 is the older
   fallback. See sections38 and42 for verified live captures.
 - The AT&T bootloader now accepts the 4.4-kernel images (fix 1 below).
 - The 4.4 kernel runs on the phone and gets through early boot.
 - **Current installed system: Test23, fully readback-verified (October16).**
-  Test20 Android boot and the Test19-derived recovery remain intact; userdata
-  is preserved. Test22 persists the Gatekeeper diagnostic and GPU-memory-stat
+  Test20 Android boot remains intact; Test24 recovery is now installed,
+  pending its first boot (section54). Userdata is preserved. Test22 persists the Gatekeeper diagnostic and GPU-memory-stat
   fallback for the two recorded system_server failures. Android reaches the
   end of its animation in Test22 but blocked on the disabled USB port HAL.
   Test23 restores the published USB port-service init RC. **Owner now confirms
@@ -2377,3 +2380,90 @@ working Android baseline and userdata. Next investigate startup reason, current
 misc/BCB, running init/recovery identity and full current slot hashes, followed
 by exact bootloader routing if needed. No corrective flash is authorized by
 evidence yet; root must identify the cause before choosing a bounded repair.
+
+**Fresh investigation (October16):** owner clarified the normal Start recovery
+entry followed a Settings factory reset. Captures `test23-boot-route-v1/v2`
+and `test24-recovery-preflight-v1` are complete and hash-verified on both Macs.
+Current full boot/recovery/misc hashes still match the exact Test20 baseline;
+boot and recovery are not swapped. Android reports normal bootmode and
+boot_completed=1. BCB first2048 bytes are zero; actual mounted cache has no
+recovery/command. Previous-boot pstore records incoming `boot-recovery`, its
+replacement with `--show_text --reason=axon-diag-test19`, native BCB clearing,
+and the owner's normal Restart (`reboot,userrequested,recovery`). That suffix
+is the native normal-restart reason, not an explicit recovery-target request.
+
+The diagnostic recovery service passes argc>1. Exact native analysis confirms
+this bypasses BCB/cache operation-argument parsing, replacing a possible
+Settings --wipe_data request with diagnostic menu arguments. Its fstab also
+omits cache/data. Thus the owner’s reported reset must not be treated as a
+proven wipe. This explains the captured one-shot recovery entry; it does not
+prove the separate bootloader-menu/PMIC route fixed. Do not patch aboot.
+
+Test24 local candidate restores native `service recovery /system/bin/recovery`,
+restores the published cache ext4 and userdata F2FS rows with wait-only fs_mgr
+flags, and stops starting the private cache persister so native recovery owns
+cache. Kernel/DT/cmdline, native binaries and adb-only setup stay exact.
+Only two of595 CPIO records differ. Signed /recovery image26625079B SHA256
+`cb56783c82110e2bc6a9356999f7e4197a5cb56167087dc06e8b9cfc955d43e5`;
+sector-padded26625536B SHA256
+`ed465040ef7ca9b22189f63aed47c45cd29039c9b5ca844a15d221d40bf64670`.
+Prepared privately in `prepared/test24-usable-recovery-v1`; NOT yet flashed.
+Fresh empty BCB and absent cache command are mandatory before its first boot.
+The installed full recovery tail is not all zero: preserve the pinned full
+partition tail when constructing a full64MiB write artifact.
+
+Native recovery formats F2FS with `-g android -O project_quota,extra_attr`
+regardless of the fstab quota flag. Prior Test20 scratch validation covered
+feature0 only. This is an unvalidated compatibility question, not a proven
+formatter defect. Verify the exact native arguments on a RAM-backed regular
+file/loop device before allowing a native factory reset; never use userdata
+for that capability test. No new userdata reset has been authorized.
+
+## 55. GApps requested; official package staged, not installed (October16)
+
+Selected official MindTheGapps Android16 ARM64 release20260915_222150:
+511299883B, SHA256
+`d60f550e4dc96606644fbbf886a9892d1391a607225e861ceaef27bd999bc6a3`.
+GitHub release digest, byte size, ZIP CRC and all44 member hashes were checked.
+ZIP and verification receipt are staged on both Macs; expanded size1138465773B.
+Live device is SDK36/arm64 with about4.25GB system space available. Installer
+mounts monolithic system and writes system/product/system_ext plus addon.d;
+it does not write boot/recovery/firmware or format data. Its exit0 does not
+prove all copies succeeded; verify payload hashes/permissions and retained
+AT&T patches after installation. Never reinstall the original ROM ZIP, which
+would replace the proven AT&T boot adaptation.
+
+Official Lineage instructions require factory reset when Android has already
+booted before GApps installation. Current device_provisioned and user_setup_complete
+are both1. Root asked for fresh permission to erase current apps/settings/files;
+answer is pending. Original Test20 wipe authorization is not reusable. Continue
+recovery preparation/validation while waiting; do not wipe or install GApps
+against this already-configured userdata without resolving this requirement.
+Sources: https://github.com/MindTheGapps/16.0.0-arm64/releases/tag/MindTheGapps-16.0.0-arm64-20260915_222150
+and https://github.com/LineageOS/lineage_wiki/blob/4edbf1aabad1ed98ab265ced65788a47c1c9e2bb/pages/gapps.md .
+
+**Test24 recovery-only installation completed (October16):** fresh full boot,
+recovery, misc and both GPT copies matched their pinned baseline. Before copies
+were verified on both Macs with returned receipt. Reviewed writer
+`install_test24_recovery_adb.py` SHA256
+`a36e613b2c2de994175000a6e6612c74a7ca02bf6a1f3b5524310ad24e8a9e76`
+passed10 author tests and43 independent checks. It wrote only inactive p19,
+preserving40483328 tail bytes beyond the sector-padded signed candidate.
+Complete64MiB recovery readback SHA256
+`52d50365ec73d60af80e235b776069fe5f2b85338a68126c2c0ea00f103170d9`.
+Full boot/misc/mainGPT/backupGPT were byte-identical before/after. Before and
+after backups and returned verification receipts are in
+`hardware-tests/test24-recovery-install-v1` on both Macs. No reset, system
+write, data write or GApps installation was performed. Phone remains in the
+same full Android boot; BCB is clear and cache command absent.
+
+Next: after the owner's pending reset decision, enter Test24 recovery using
+a separately guarded menu-only route and verify native runtime identity,
+filesystem paths and memory. Do not assume the bootloader Recovery menu works.
+`test24-recovery-capture.sh` is read-only. The fixed RAM-only formatter checker
+SHA256 `5392afda9f3fb17507017ac1e52707253e1aca8a5c9354be86e1dc665e04e26d`
+has15 independent confinement/cleanup checks; superseded0d717... was never run.
+Bound the actual run to180seconds and inspect cleanup on failure. The runtime
+boot and native formatter test remain pending, as does GApps installation.
+Local free space is below1GiB; plan adequate space before capturing a changed
+full GApps system image. Preserve existing baseline images and backups.

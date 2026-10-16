@@ -1,0 +1,147 @@
+{
+  "schema": 1,
+  "description": "Test24 recovery preparation/review source and GApps package metadata. No images, private keys, raw phone captures or partition backups. Sanitized references are not executable installation gates.",
+  "entries": [
+    {
+      "source": "prepare_test24_usable_recovery.py",
+      "public_path": "prepare_test24_usable_recovery.py.txt",
+      "source_sha256": "fcd074ac517d0524f9aeb1613839be9f0dbde9117b7cd1d4df6a74d4437ae6c0",
+      "published_sha256": "fcd074ac517d0524f9aeb1613839be9f0dbde9117b7cd1d4df6a74d4437ae6c0",
+      "published_bytes": 16445,
+      "transformations": []
+    },
+    {
+      "source": "install_test24_recovery_adb.py",
+      "public_path": "install_test24_recovery_adb.py.txt",
+      "source_sha256": "a36e613b2c2de994175000a6e6612c74a7ca02bf6a1f3b5524310ad24e8a9e76",
+      "published_sha256": "a36e613b2c2de994175000a6e6612c74a7ca02bf6a1f3b5524310ad24e8a9e76",
+      "published_bytes": 21244,
+      "transformations": []
+    },
+    {
+      "source": "test_test24_recovery_adb.py",
+      "public_path": "test_test24_recovery_adb.py.txt",
+      "source_sha256": "aa5697c2a90afb38ce8eccca1bbf8dcb45a5fae37bb167001c327a42f7a4a30b",
+      "published_sha256": "aa5697c2a90afb38ce8eccca1bbf8dcb45a5fae37bb167001c327a42f7a4a30b",
+      "published_bytes": 7457,
+      "transformations": []
+    },
+    {
+      "source": "capture_test23_boot_route.py",
+      "public_path": "capture_test23_boot_route.py.txt",
+      "source_sha256": "7e7f4760473d3035f90cb8a020371659d736d0f1a7d7c6a0f60bb3d6f5ccb89d",
+      "published_sha256": "7e7f4760473d3035f90cb8a020371659d736d0f1a7d7c6a0f60bb3d6f5ccb89d",
+      "published_bytes": 2912,
+      "transformations": []
+    },
+    {
+      "source": "capture_test23_boot_route_v2.py",
+      "public_path": "capture_test23_boot_route_v2.py.txt",
+      "source_sha256": "2c578c23455d70c7693f2e5a2f92faad289adf853d750b5765e9780d3dfc0060",
+      "published_sha256": "2c578c23455d70c7693f2e5a2f92faad289adf853d750b5765e9780d3dfc0060",
+      "published_bytes": 1430,
+      "transformations": []
+    },
+    {
+      "source": "capture_test24_recovery_preflight.py",
+      "public_path": "capture_test24_recovery_preflight.py.txt",
+      "source_sha256": "b3526a3d94e567cc9eeaf4c7f34e8c00f24e4630a4e2ce1ea309c8fd953bbf58",
+      "published_sha256": "b3526a3d94e567cc9eeaf4c7f34e8c00f24e4630a4e2ce1ea309c8fd953bbf58",
+      "published_bytes": 1677,
+      "transformations": []
+    },
+    {
+      "source": "test24-f2fs-native-ram-check.sh",
+      "public_path": "test24-f2fs-native-ram-check.sh.txt",
+      "source_sha256": "5392afda9f3fb17507017ac1e52707253e1aca8a5c9354be86e1dc665e04e26d",
+      "published_sha256": "5392afda9f3fb17507017ac1e52707253e1aca8a5c9354be86e1dc665e04e26d",
+      "published_bytes": 4411,
+      "transformations": []
+    },
+    {
+      "source": "test24-recovery-capture.sh",
+      "public_path": "test24-recovery-capture.sh.txt",
+      "source_sha256": "27ae2bb7c5499cfa534befd64d8e57576ffe3a50ae472b7b7f2e3b11a5cef13f",
+      "published_sha256": "27ae2bb7c5499cfa534befd64d8e57576ffe3a50ae472b7b7f2e3b11a5cef13f",
+      "published_bytes": 3491,
+      "transformations": []
+    },
+    {
+      "source": "test24-recovery-independent-review.json",
+      "public_path": "test24-recovery-independent-review.json",
+      "source_sha256": "82de6ccf264765bc833e94f8af0f8ac8e06dbc3975adf134325bd5626e53ba32",
+      "published_sha256": "82de6ccf264765bc833e94f8af0f8ac8e06dbc3975adf134325bd5626e53ba32",
+      "published_bytes": 3277,
+      "transformations": []
+    },
+    {
+      "source": "test24-recovery-author-validation.json",
+      "public_path": "test24-recovery-author-validation.json",
+      "source_sha256": "fb822f0210847cbf17d9d2e7e4aca7a2e0343775fdbf90c10718840cf466234e",
+      "published_sha256": "fb822f0210847cbf17d9d2e7e4aca7a2e0343775fdbf90c10718840cf466234e",
+      "published_bytes": 1149,
+      "transformations": []
+    },
+    {
+      "source": "test24-recovery-adb-independent-review.json",
+      "public_path": "test24-recovery-adb-independent-review.json",
+      "source_sha256": "f84298ff3daa9dbedf42dfc444b141cd43eb8dc577d97795a1aec3f5d35ffc21",
+      "published_sha256": "f84298ff3daa9dbedf42dfc444b141cd43eb8dc577d97795a1aec3f5d35ffc21",
+      "published_bytes": 3007,
+      "transformations": []
+    },
+    {
+      "source": "test24-recovery-adb-author-validation.json",
+      "public_path": "test24-recovery-adb-author-validation.json",
+      "source_sha256": "8b4249d6622435c788eadeecd7d2d5b8d3d0a5f2bef0be09340e41905d22a134",
+      "published_sha256": "8b4249d6622435c788eadeecd7d2d5b8d3d0a5f2bef0be09340e41905d22a134",
+      "published_bytes": 769,
+      "transformations": []
+    },
+    {
+      "source": "test24-f2fs-ram-author-checks.json",
+      "public_path": "test24-f2fs-ram-author-checks.json",
+      "source_sha256": "505ddb07a7fa278beaa0278393195bf463384cfa65f8d585c4ee2a7b64282b18",
+      "published_sha256": "505ddb07a7fa278beaa0278393195bf463384cfa65f8d585c4ee2a7b64282b18",
+      "published_bytes": 693,
+      "transformations": []
+    },
+    {
+      "source": "test24-f2fs-ram-independent-review.json",
+      "public_path": "test24-f2fs-ram-independent-review.json",
+      "source_sha256": "ed32062af451918b253be0a4adb7c4ae77849acf195fe1a2e0ba461a4b8392b3",
+      "published_sha256": "ed32062af451918b253be0a4adb7c4ae77849acf195fe1a2e0ba461a4b8392b3",
+      "published_bytes": 1362,
+      "transformations": []
+    },
+    {
+      "source": "prepared/test24-usable-recovery-v1/manifest.json",
+      "public_path": "prepared/test24-usable-recovery-v1/manifest.json",
+      "source_sha256": "fd3be4351829e3b20ed0d0b9a1956aba62d983144c51674448065edb0cac8a75",
+      "published_sha256": "fd3be4351829e3b20ed0d0b9a1956aba62d983144c51674448065edb0cac8a75",
+      "published_bytes": 5427,
+      "transformations": []
+    },
+    {
+      "source": "gapps/verified.json",
+      "public_path": "gapps/verified.json",
+      "source_sha256": "0713effd751bad6732b3c2a3f943842642219a0949571810f39d23388b8f2979",
+      "published_sha256": "0713effd751bad6732b3c2a3f943842642219a0949571810f39d23388b8f2979",
+      "published_bytes": 390,
+      "transformations": []
+    },
+    {
+      "source": "gapps/install-preparation.json",
+      "public_path": "gapps/install-preparation.json",
+      "source_sha256": "b20d25ef6b770ff7d63ef7f825dc9fc5bc3ede103868fa2fad9f2ea1995f575d",
+      "published_sha256": "7f6a2b55dcbf1b06812e6fc00e0e0b2fc74c71490fc9d0c441cadf0e74398bad",
+      "published_bytes": 9693,
+      "transformations": [
+        {
+          "kind": "local_path_or_session_placeholder",
+          "count": 1
+        }
+      ]
+    }
+  ]
+}

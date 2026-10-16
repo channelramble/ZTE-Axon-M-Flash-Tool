@@ -1,0 +1,89 @@
+#!/system/bin/sh
+# Read-only first-boot recovery identity. Run through the bounded Capture wrapper.
+set -eu
+set -o pipefail
+PATH=/system/bin
+export PATH
+[ "$#" = 0 ]
+[ "$(id -u)" = 0 ]
+[ "$(uname -r)" = 4.4.302-cip112-fujisan ]
+[ "$(getprop ro.bootmode)" = recovery ]
+[ "$(getprop init.svc.recovery)" = running ]
+hash_is() {
+    result=$(sha256sum "$1")
+    digest=${result%% *}
+    [ "$digest" = "$2" ] || return 1
+    printf 'verified_sha256 %s %s\n' "$digest" "$1"
+}
+hash_is /system/bin/recovery 492b14d1ef9d3f269716465d4d492689e6a41df018f86e4efac139bf34bee220
+hash_is /system/etc/init/hw/init.rc 3f589eb1b50b408e6d20245da99ee789d20407d4398412af9965e90c1e01327e
+hash_is /system/etc/recovery.fstab 697d1f6c7f9e90181aa67cb706cb00a50a69a202a835ccc3aee104cf16c1fafb
+hash_is /system/bin/init 714ecace1ad409d588f497d51c738cf0bdb0a1d23ee3029c5b976db5f0e468eb
+pids=$(pidof recovery)
+set -- $pids
+[ "$#" -ge 1 ] && [ "$#" -le 8 ]
+for pid in "$@"; do
+    case "$pid" in ''|*[!0-9]*) exit 21 ;; esac
+    hash_is "/proc/$pid/exe" 492b14d1ef9d3f269716465d4d492689e6a41df018f86e4efac139bf34bee220
+    argv=$(tr '\000' '\n' < "/proc/$pid/cmdline")
+    [ "$argv" = /system/bin/recovery ]
+    printf 'recovery_pid=%s native_argv=/system/bin/recovery\n' "$pid"
+done
+for key in ro.bootmode init.svc.recovery sys.usb.config sys.usb.state sys.usb.ffs.ready; do
+    printf '%s=%s\n' "$key" "$(getprop "$key")"
+done
+printf 'selinux=%s\n' "$(getenforce)"
+printf 'page_size=%s\n' "$(getconf PAGESIZE)"
+printf '%s\n' '--- relevant mounts ---'
+cache_mounted=0
+private_cache_mounted=0
+while IFS=' ' read -r dev point fs opts rest; do
+    case "$point" in /tmp|/cache|/data|/system|/tmp/axon-cache-test19)
+        printf '%s %s %s %s\n' "$dev" "$point" "$fs" "$opts" ;;
+    esac
+    if [ "$point" = /cache ]; then
+        [ "$fs" = ext4 ] && [ "$(readlink -f "$dev")" = /dev/block/mmcblk0p36 ]
+        cache_mounted=$((cache_mounted + 1))
+    fi
+    if [ "$point" = /tmp/axon-cache-test19 ]; then private_cache_mounted=1; fi
+done < /proc/mounts
+printf '%s\n' '--- memory ---'
+head -8 /proc/meminfo
+for spec in cache:36 userdata:48 system:20 misc:38; do
+    savedIFS=$IFS
+    IFS=:
+    set -- $spec
+    IFS=$savedIFS
+    name=$1
+    index=$2
+    node=/dev/block/mmcblk0p$index
+    printf 'volume=%s node=%s\n' "$name" "$node"
+    [ -b "$node" ] && [ ! -L "$node" ]
+    for prefix in /dev/block/platform/soc/7464900.sdhci/by-name /dev/block/bootdevice/by-name; do
+        path=$prefix/$name
+        if [ -e "$path" ] || [ -L "$path" ]; then
+            target=$(readlink -f "$path")
+            [ "$target" = "$node" ]
+            printf 'alias=%s target=%s\n' "$path" "$target"
+        else
+            printf 'alias_absent=%s\n' "$path"
+        fi
+    done
+    for attr in start size dev; do
+        printf '%s=%s\n' "$attr" "$(cat /sys/class/block/mmcblk0p$index/$attr)"
+    done
+done
+printf '%s\n' '--- pending command state ---'
+[ "$cache_mounted" = 1 ] && [ "$private_cache_mounted" = 0 ]
+if [ -e /cache/recovery/command ] || [ -L /cache/recovery/command ]; then
+    printf '%s\n' cache_recovery_command_present
+    stat -c 'cache_command_bytes=%s' /cache/recovery/command
+    exit 31
+else
+    printf '%s\n' cache_recovery_command_absent
+fi
+bcb=$(dd if=/dev/block/mmcblk0p38 bs=2048 count=1 2>/dev/null | sha256sum)
+bcb=${bcb%% *}
+printf 'bcb_first2048_sha256=%s\n' "$bcb"
+[ "$bcb" = e5a00aa9991ac8a5ee3109844d84a55583bd20572ad3ffcd42792f3c36b183ad ]
+printf '%s\n' TEST24_NATIVE_RECOVERY_READONLY_IDENTITY_PASSED

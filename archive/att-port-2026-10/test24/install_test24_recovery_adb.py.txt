@@ -1,0 +1,437 @@
+#!/usr/bin/env python3
+"""Exact Test24 inactive-recovery transaction; root is the sole phone operator.
+
+Default is files-only preflight. Explicit backup/stage/write phases require
+--execute. verify-before/verify-after are LOCAL copies/receipt checks only.
+No reboot, mount, userdata/system/boot/misc write or automatic retry exists.
+"""
+from pathlib import Path
+import argparse
+import hashlib
+import json
+import os
+import platform
+import re
+import secrets
+import shlex
+import time
+
+ROOT = Path(__file__).resolve().parent
+TRANSPORT_SHA = '9c89fc1ea65e3040cff4ee16758b20b3733c6ec2df2950b73e39700776b57254'
+if hashlib.sha256((ROOT / 'capture_test22_adb.py').read_bytes()).hexdigest() != TRANSPORT_SHA:
+    raise ValueError('Reviewed Capture dependency changed')
+from capture_test22_adb import (ADB, PORT, Capture, bounded_process,
+                                identity_command, verify_identity)
+
+PARTITION_BYTES = 67108864
+IMAGE_SHA = 'cb56783c82110e2bc6a9356999f7e4197a5cb56167087dc06e8b9cfc955d43e5'
+IMAGE_BYTES = 26625079
+PADDED_SHA = 'ed465040ef7ca9b22189f63aed47c45cd29039c9b5ca844a15d221d40bf64670'
+PADDED_BYTES = 26625536
+MANIFEST_SHA = 'fd3be4351829e3b20ed0d0b9a1956aba62d983144c51674448065edb0cac8a75'
+OUTPUT_NAME = 'test24-recovery-install-v1'
+WHOLE_SECONDS = 900
+# name: fixed node, start sector, sector count, major:minor, full expected SHA.
+PARTS = {
+    'boot': ('mmcblk0p18', 1050624, 131072, '179:18',
+             '4434306a5c58d4de5ee018a59a04ae3f551d7073efae1fe7a07bd07e468a17d6'),
+    'recovery': ('mmcblk0p19', 1181696, 131072, '179:19',
+                 'f5bb5bf5d70ab1e44fd5ac9d888270e219f527d21a67796cf683cef5521ecb35'),
+    'misc': ('mmcblk0p38', 18626584, 2048, '259:6',
+             '07e3021342d8a12056e9faf36ade8832e1d24e8daaa6930516da3ed88412183e'),
+    'cache': ('mmcblk0p36', 15204376, 3356672, '259:4', None),
+}
+FILES = {
+    'gpt-main.bin': ('mmcblk0', 0, 14,
+                     '7f1e4fd44e69e004189f0256ce6d35addfb1e3dbfe1cd55bfd2047b580b1e891'),
+    'gpt-backup.bin': ('mmcblk0', 122142687, 33,
+                       'b76a0353e9b841984f434f8f7d875f76b18ba1d4c01db15958d13e3525b03990'),
+}
+for _name in ('boot', 'recovery', 'misc'):
+    _node, _start, _count, _dev, _hash = PARTS[_name]
+    FILES[_name + '.bin'] = (_node, 0, _count, _hash)
+PATCHES = {
+    '/vendor/etc/init/android.hardware.usb@1.0-service.rc':
+        '77b3cb1253f3c113cc783d298a1e2dd603f14bc56fbe280f8f7b51aa1de37c9f',
+    '/vendor/bin/hw/android.hardware.usb@1.0-service':
+        '6ef50f071c02fa5e13dd3541cce9c276186f600ea6abb8d18ae00ba7e587968d',
+    '/system/bin/gatekeeperd':
+        '6ad0a440825550c3f5ec504bf438cabcbbb987cf581f088cb939d52164deb5f6',
+    '/system/lib64/libmeminfo.so':
+        '040e0c8f97434b8d101914901f55b346c4b27eee8dc82b43f2a766258245a028',
+    '/vendor/etc/init/android.hardware.gatekeeper@1.0-service.rc':
+        '172a6f91ce32c0b8cb00e29802d0a50832e01c7813d1accc0c617296fd6ef057',
+}
+
+
+def sha(data):
+    return hashlib.sha256(data).hexdigest()
+
+
+def require(value, message):
+    if not value:
+        raise ValueError(message)
+
+
+def regular(path):
+    require(path.is_file() and not path.is_symlink(), 'Expected regular file: ' + path.name)
+    return path.read_bytes()
+
+
+def fsync_dir(path):
+    fd = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def new_file(path, data):
+    with path.open('xb') as stream:
+        stream.write(data)
+        stream.flush()
+        os.fsync(stream.fileno())
+    fsync_dir(path.parent)
+
+
+def save_state(out, state):
+    temporary = out / '.transaction.json.tmp'
+    with temporary.open('x') as stream:
+        json.dump(state, stream, indent=2)
+        stream.write('\n')
+        stream.flush()
+        os.fsync(stream.fileno())
+    temporary.replace(out / 'transaction.json')
+    fsync_dir(out)
+
+
+def load_inputs(candidate, baseline):
+    image = regular(candidate / 'recovery.img')
+    require(len(image) == IMAGE_BYTES and sha(image) == IMAGE_SHA, 'Exact Test24 image pin failed')
+    manifest = regular(candidate / 'manifest.json')
+    require(sha(manifest) == MANIFEST_SHA, 'Exact Test24 manifest pin failed')
+    m = json.loads(manifest)
+    require(m['passed'] and m['image_sha256'] == IMAGE_SHA and m['image_bytes'] == IMAGE_BYTES
+            and m['target'] == '/recovery' and m['padded_sha256'] == PADDED_SHA
+            and m['padded_bytes'] == PADDED_BYTES, 'Candidate manifest fields differ')
+    before = regular(baseline)
+    require(len(before) == PARTITION_BYTES and sha(before) == PARTS['recovery'][4],
+            'Exact current full recovery baseline required')
+    padded = image + b'\0' * (-len(image) % 512)
+    require(len(padded) == PADDED_BYTES and sha(padded) == PADDED_SHA, 'Sector padding differs')
+    full = padded + before[len(padded):]
+    require(len(full) == PARTITION_BYTES and full[PADDED_BYTES:] == before[PADDED_BYTES:],
+            'Full recovery tail construction failed')
+    return full
+
+
+def verify_review(path):
+    review = json.loads(regular(path))
+    require(review.get('passed') is True and review.get('image_sha256') == IMAGE_SHA,
+            'Passing independent review of exact Test24 image required')
+    return sha(regular(path))
+
+
+def verify_writer_review(path):
+    raw = regular(path)
+    review = json.loads(raw)
+    require(review.get('passed') is True
+            and review.get('runner_sha256') == sha(Path(__file__).read_bytes()),
+            'Passing independent review of exact writer required')
+    return sha(raw)
+
+
+def expected_files(full_sha, after):
+    return {name: {'bytes': row[2] * 512,
+                   'sha256': full_sha if after and name == 'recovery.bin' else row[3]}
+            for name, row in FILES.items()}
+
+
+def validate_snapshot(directory, full_sha, after):
+    expected = expected_files(full_sha, after)
+    for name, spec in expected.items():
+        data = regular(directory / name)
+        require(len(data) == spec['bytes'] and sha(data) == spec['sha256'],
+                'Snapshot content pin failed: ' + name)
+        if name == 'misc.bin':
+            require(not any(data[:2048]), 'Pending bootloader message')
+    return expected
+
+
+def host_hash():
+    name = platform.node()
+    require(bool(name), 'Cannot identify verification host')
+    return sha(name.encode())
+
+
+def verify_copy(out, full_sha, after):
+    name = 'after' if after else 'before'
+    directory = out / name
+    raw = regular(directory / 'manifest.json')
+    manifest = json.loads(raw)
+    expected = validate_snapshot(directory, full_sha, after)
+    require(manifest['files'] == expected and manifest['candidate_sha256'] == IMAGE_SHA
+            and manifest['expected_full_recovery_sha256'] == full_sha
+            and manifest['phase'] == name, 'Snapshot manifest differs')
+    require(manifest['origin_host_sha256'] != host_hash(), 'Receipt must be made on the other Mac')
+    receipt = {'complete': True, 'both_macs_verified': True, 'phase': name,
+               'manifest_sha256': sha(raw), 'candidate_sha256': IMAGE_SHA,
+               'expected_full_recovery_sha256': full_sha, 'files': expected,
+               'origin_host_sha256': manifest['origin_host_sha256'],
+               'verifier_host_sha256': host_hash()}
+    new_file(directory / 'local-verification.json', (json.dumps(receipt, indent=2) + '\n').encode())
+    return receipt
+
+
+def require_receipt(out, full_sha, after):
+    name = 'after' if after else 'before'
+    directory = out / name
+    raw = regular(directory / 'manifest.json')
+    manifest = json.loads(raw)
+    expected = validate_snapshot(directory, full_sha, after)
+    r = json.loads(regular(directory / 'local-verification.json'))
+    require(manifest['files'] == expected and manifest['candidate_sha256'] == IMAGE_SHA
+            and manifest['expected_full_recovery_sha256'] == full_sha
+            and manifest['phase'] == name, 'Snapshot manifest differs')
+    require(r.get('complete') is True and r.get('both_macs_verified') is True
+            and r.get('phase') == name and r.get('manifest_sha256') == sha(raw)
+            and r.get('candidate_sha256') == IMAGE_SHA
+            and r.get('expected_full_recovery_sha256') == full_sha and r.get('files') == expected
+            and r.get('origin_host_sha256') == manifest['origin_host_sha256']
+            and re.fullmatch('[0-9a-f]{64}', r.get('verifier_host_sha256', ''))
+            and r['verifier_host_sha256'] != r['origin_host_sha256'],
+            'Both-Mac snapshot verification receipt required')
+    return sha(regular(directory / 'local-verification.json'))
+
+
+def remote(capture, command, cap=16384, seconds=15):
+    body, info = capture.remote(command, cap, seconds)
+    require(info.get('status') == 'ok' and info.get('framed') is True
+            and info.get('remote_rc') == 0 and info.get('adb_rc') == 0,
+            'Bounded remote operation failed; no retry')
+    return body
+
+
+def connect():
+    raw, rc, status = bounded_process([str(ADB), '-P', PORT, 'version'], 10, 4096)
+    require(status == 'ok' and rc == 0 and re.search(rb'^Version 29\.0\.6(?:-|\s|$)', raw, re.M),
+            'Pinned adb29 required')
+    raw, rc, status = bounded_process([str(ADB), '-P', PORT, 'devices'], 10, 65536)
+    lines = raw.decode('ascii').replace('\r', '').splitlines()
+    require(status == 'ok' and rc == 0 and lines.count('List of devices attached') == 1,
+            'Invalid adb inventory')
+    rows = [line.split() for line in lines[lines.index('List of devices attached') + 1:] if line.strip()]
+    require(len(rows) == 1 and len(rows[0]) == 2 and rows[0][1] == 'device',
+            'Require exactly one full Android adb device')
+    capture = Capture(rows[0][0], time.monotonic() + WHOLE_SECONDS)
+    body, info = capture.remote(identity_command(), 4096, 10)
+    require(verify_identity(body, info), 'Exact Android base identity/root guard failed')
+    output = remote(capture, '/system/bin/sha256sum ' + ' '.join(PATCHES))
+    rows = [line.split() for line in output.decode('ascii').splitlines()]
+    require(len(rows) == len(PATCHES) and all(len(row) == 2 for row in rows)
+            and {row[1]: row[0] for row in rows} == PATCHES, 'Exact Test23 patches differ')
+    return capture
+
+
+def geometry_guard():
+    lines = ['set -e', 'PATH=/system/bin; export PATH', '[ "$(id -u)" = 0 ]',
+             '[ "$(getprop sys.boot_completed)" = 1 ]',
+             '[ "$(getprop ro.product.device)" = fujisan ]',
+             '[ "$(getprop init.svc.recovery)" = "" ]',
+             '[ "$(cat /sys/class/block/mmcblk0/queue/logical_block_size)" = 512 ]',
+             '[ "$(cat /sys/class/block/mmcblk0/size)" = 122142720 ]',
+             '[ -b /dev/block/mmcblk0 ]',
+             '[ "$(readlink -f /dev/block/mmcblk0)" = /dev/block/mmcblk0 ]',
+             '[ "$(stat -c %t:%T /dev/block/mmcblk0)" = b3:0 ]']
+    for name, (node, start, sectors, dev, _) in PARTS.items():
+        major, minor = map(int, dev.split(':'))
+        lines += [f'[ -b /dev/block/{node} ]',
+                  f'[ "$(readlink -f /dev/block/{node})" = /dev/block/{node} ]',
+                  f'[ "$(cat /sys/class/block/{node}/start)" = {start} ]',
+                  f'[ "$(cat /sys/class/block/{node}/size)" = {sectors} ]',
+                  f'[ "$(cat /sys/class/block/{node}/dev)" = {dev} ]',
+                  f'[ "$(stat -c %t:%T /dev/block/{node})" = {major:x}:{minor:x} ]',
+                  f'[ "$(blockdev --getsize64 /dev/block/{node})" = {sectors * 512} ]']
+    lines += [
+        # Both adb's and init's namespace must show these slots unmounted.
+        "awk '$3==\"179:18\"||$3==\"179:19\"||$3==\"259:6\" {bad=1} END {exit bad}' /proc/self/mountinfo /proc/1/mountinfo",
+        '[ ! -L /cache ] && [ ! -L /cache/recovery ]',
+        "n=$(awk '$2==\"/cache\" {n++} END {print n+0}' /proc/mounts); [ \"$n\" = 1 ]",
+        "s=$(awk '$2==\"/cache\" {print $1}' /proc/mounts); [ \"$(readlink -f \"$s\")\" = /dev/block/mmcblk0p36 ]",
+        "[ \"$(awk '$2==\"/cache\" {print $3}' /proc/mounts)\" = ext4 ]",
+        '[ ! -e /cache/recovery/command ] && [ ! -L /cache/recovery/command ]',
+        'b=$(dd if=/dev/block/mmcblk0p38 bs=2048 count=1 2>/dev/null | sha256sum); '
+        '[ "${b%% *}" = ' + sha(b'\0' * 2048) + ' ]',
+    ]
+    return '\n'.join(lines) + '\n'
+
+
+def guard(capture, expected_boot_id=None):
+    raw = remote(capture, geometry_guard() + 'sha256sum /proc/sys/kernel/random/boot_id')
+    rows = raw.decode('ascii').split()
+    require(len(rows) == 2 and re.fullmatch('[0-9a-f]{64}', rows[0])
+            and rows[1] == '/proc/sys/kernel/random/boot_id', 'Malformed boot identity')
+    if expected_boot_id is not None:
+        require(rows[0] == expected_boot_id, 'Phone restarted since backup; stop')
+    return rows[0]
+
+
+def read_command(row):
+    node, start, count, _ = row
+    return f'/system/bin/dd if=/dev/block/{node} bs=512 skip={start} count={count} 2>/dev/null'
+
+
+def snapshot(capture, directory, full_sha, after, origin):
+    directory.mkdir(mode=0o700, exist_ok=False)
+    fsync_dir(directory.parent)
+    expected = expected_files(full_sha, after)
+    for name, row in FILES.items():
+        spec = expected[name]
+        data = remote(capture, read_command(row), spec['bytes'], 150)
+        require(len(data) == spec['bytes'] and sha(data) == spec['sha256'],
+                'Full live read differs: ' + name)
+        if name == 'misc.bin':
+            require(not any(data[:2048]), 'Pending BCB')
+        new_file(directory / name, data)
+    manifest = {'phase': 'after' if after else 'before', 'files': expected,
+                'candidate_sha256': IMAGE_SHA, 'expected_full_recovery_sha256': full_sha,
+                'origin_host_sha256': origin}
+    new_file(directory / 'manifest.json', (json.dumps(manifest, indent=2) + '\n').encode())
+
+
+def native_pin_guard(full_sha=None):
+    require(full_sha is None or re.fullmatch('[0-9a-f]{64}', full_sha),
+            'Invalid expected full recovery hash')
+    lines = [geometry_guard(), 'set -o pipefail']
+    for name, row in FILES.items():
+        expected = full_sha if name == 'recovery.bin' and full_sha else row[3]
+        lines += ['h=$(' + read_command(row) + ' | sha256sum)',
+                  '[ "${h%% *}" = ' + expected + ' ]']
+    return '\n'.join(lines) + '\n'
+
+
+def load_state(out, full_sha):
+    s = json.loads(regular(out / 'transaction.json'))
+    require(s['candidate_sha256'] == IMAGE_SHA and s['candidate_manifest_sha256'] == MANIFEST_SHA
+            and s['full_recovery_sha256'] == full_sha and s['reset_sent'] is False
+            and s['origin_host_sha256'] == host_hash(), 'Transaction identity differs')
+    return s
+
+
+def write_command(stage_path, full_sha, boot_id):
+    require(re.fullmatch('[0-9a-f]{64}', full_sha) and re.fullmatch('[0-9a-f]{64}', boot_id),
+            'Invalid staged hash or boot identity')
+    require(re.fullmatch('/dev/axon-test24-recovery-[0-9a-f]{24}/candidate-full.bin', stage_path),
+            'Unexpected staged candidate path')
+    directory = str(Path(stage_path).parent)
+    return native_pin_guard() + (
+        'h=$(sha256sum /proc/sys/kernel/random/boot_id); [ "${h%% *}" = ' + boot_id + ' ]\n'
+        f'[ -d {directory} ] && [ ! -L {directory} ]\n'
+        f'[ "$(stat -c %u:%a {directory})" = 0:700 ]\n'
+        f'[ -f {stage_path} ] && [ ! -L {stage_path} ]\n'
+        f'[ "$(stat -c %s {stage_path})" = {PARTITION_BYTES} ]\n'
+        f'h=$(sha256sum {stage_path}); [ "${{h%% *}}" = {full_sha} ]\n'
+        f'dd if={stage_path} of=/dev/block/mmcblk0p19 bs=4096 count=16384 conv=notrunc,fsync\n'
+        'sync\nprintf "RECOVERY_WRITE_COMPLETE\\n"\n')
+
+
+def run_phase(args, full):
+    out, full_sha = args.output_dir, sha(full)
+    require(out.name == OUTPUT_NAME and not out.is_symlink(), 'Unique Test24 output name required')
+    if args.phase in ('verify-before', 'verify-after'):
+        return verify_copy(out, full_sha, args.phase == 'verify-after')
+    if args.phase == 'finalize':
+        state = load_state(out, full_sha)
+        require(state['phase'] == 'after_verified', 'Full after readbacks not completed')
+        state['after_receipt_sha256'] = require_receipt(out, full_sha, True)
+        state.update(phase='complete', both_macs_after_verified=True)
+        save_state(out, state)
+        return state
+    require(args.execute, 'Explicit --execute is required for phone phases')
+    if args.phase == 'backup':
+        out.mkdir(mode=0o700, parents=True, exist_ok=False)
+        fsync_dir(out.parent)
+        state = {'phase': 'backup_started', 'candidate_sha256': IMAGE_SHA,
+                 'candidate_manifest_sha256': MANIFEST_SHA, 'full_recovery_sha256': full_sha,
+                 'origin_host_sha256': host_hash(), 'reset_sent': False,
+                 'write_started': False, 'write_completed': False}
+        save_state(out, state)
+        capture = connect()
+        state['boot_id_sha256'] = guard(capture)
+        snapshot(capture, out / 'before', full_sha, False, state['origin_host_sha256'])
+        guard(capture, state['boot_id_sha256'])
+        new_file(out / 'candidate-full.bin', full)
+        state['phase'] = 'before_verified'
+        save_state(out, state)
+        return state
+    state = load_state(out, full_sha)
+    state['before_receipt_sha256'] = require_receipt(out, full_sha, False)
+    state['independent_review_sha256'] = verify_review(args.review)
+    state['writer_review_sha256'] = verify_writer_review(args.writer_review)
+    require(regular(out / 'candidate-full.bin') == full, 'Local staged full image differs')
+    if args.phase == 'stage':
+        require(state['phase'] == 'before_verified' and not state['write_started'], 'Stage phase not available')
+        capture = connect()
+        guard(capture, state['boot_id_sha256'])
+        remote(capture, native_pin_guard(), 16384, 180)
+        workspace = '/dev/axon-test24-recovery-' + secrets.token_hex(12)
+        state.update(phase='stage_started', device_workspace=workspace)
+        save_state(out, state)
+        remote(capture, 'set -e; umask 077; mkdir ' + shlex.quote(workspace))
+        stage = workspace + '/candidate-full.bin'
+        raw, rc, status = bounded_process([str(ADB), '-P', PORT, '-s', capture.serial,
+            'push', str(out / 'candidate-full.bin'), stage], 150, 65536)
+        require(status == 'ok' and rc == 0, 'Candidate push failed; no retry')
+        result = remote(capture, f'set -e; [ ! -L {stage} ]; stat -c %s {stage}; sha256sum {stage}')
+        require(result.decode('ascii').split() == [str(PARTITION_BYTES), full_sha, stage],
+                'Remote staged bytes/hash differ')
+        state.update(phase='staged', stage_path=stage)
+        save_state(out, state)
+        return state
+    require(args.phase == 'write' and state['phase'] == 'staged'
+            and not state['write_started'], 'One-shot write phase is not available')
+    capture = connect()
+    guard(capture, state['boot_id_sha256'])
+    state.update(phase='write_started', write_started=True)
+    save_state(out, state)
+    remote(capture, write_command(state['stage_path'], full_sha, state['boot_id_sha256']), 16384, 240)
+    state.update(phase='write_completed', write_completed=True)
+    save_state(out, state)
+    guard(capture, state['boot_id_sha256'])
+    snapshot(capture, out / 'after', full_sha, True, state['origin_host_sha256'])
+    require(regular(out / 'after/recovery.bin') == full, 'Full recovery byte comparison failed')
+    for name in FILES:
+        if name != 'recovery.bin':
+            require(regular(out / 'before' / name) == regular(out / 'after' / name),
+                    'Protected bytes changed: ' + name)
+    guard(capture, state['boot_id_sha256'])
+    state.update(phase='after_verified', full_readback_verified=True, protected_bytes_unchanged=True)
+    save_state(out, state)
+    return state
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--phase', choices=('preflight', 'backup', 'verify-before', 'stage',
+                                           'write', 'verify-after', 'finalize'), default='preflight')
+    parser.add_argument('--candidate-dir', type=Path, default=ROOT / 'prepared/test24-usable-recovery-v1')
+    parser.add_argument('--baseline-recovery', type=Path, default=ROOT / 'hardware-tests/test23-edl-before/recovery.bin')
+    parser.add_argument('--review', type=Path, default=ROOT / 'test24-recovery-independent-review.json')
+    parser.add_argument('--writer-review', type=Path, default=ROOT / 'test24-recovery-adb-independent-review.json')
+    parser.add_argument('--output-dir', type=Path, default=ROOT / 'hardware-tests' / OUTPUT_NAME)
+    parser.add_argument('--execute', action='store_true')
+    args = parser.parse_args(argv)
+    os.umask(0o077)
+    full = load_inputs(args.candidate_dir, args.baseline_recovery)
+    if args.phase == 'preflight':
+        result = {'files_only_validated': True, 'phone_operations': False, 'image_sha256': IMAGE_SHA,
+                  'manifest_sha256': MANIFEST_SHA, 'full_recovery_sha256': sha(full),
+                  'preserved_tail_bytes': PARTITION_BYTES - PADDED_BYTES, 'reset_sent': False}
+    else:
+        result = run_phase(args, full)
+    print(json.dumps(result, indent=2))
+    return 0
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())

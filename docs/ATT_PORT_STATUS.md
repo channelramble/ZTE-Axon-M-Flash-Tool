@@ -18,11 +18,14 @@ package**. Do not install China/DoCoMo firmware or replace the AT&T boot chain.
 | Installation | Complete Test23 system readback matches its expected SHA-256; boot/recovery/GPT/misc remained unchanged by Test23 | Geometry and byte-level gates were specific to the tested device |
 
 Before and after evidence was copied and hash-verified on two computers.
-The owner's latest report adds an unresolved startup issue: normal **Start**
-can enter LOS recovery, whose **Restart** then boots Android; the bootloader's
-Recovery choice still fails. This route has not yet been matched to fresh BCB,
-boot-reason or slot evidence. Successful Android boot is established, but
-reliable direct startup is not. See AGENTS section54.
+The owner's latest report followed a Settings factory reset: normal **Start**
+entered LOS recovery, whose **Restart** then booted Android. Fresh full-slot
+hashes prove the images are not swapped. Previous-boot pstore records an incoming
+BCB recovery request; diagnostic command-line arguments suppressed processing
+of the requested operation. A Test24 recovery candidate removes that restriction
+and restores cache/data access. It is now flashed with full readback verified;
+its first boot is still pending. The bootloader's
+Recovery choice remains a separate unresolved route. See AGENTS section54.
 
 The Test20 installation used an explicitly approved clean F2FS format. Test22
 and Test23 preserved that userdata; **boot or display troubleshooting does not
@@ -52,13 +55,13 @@ not published.
 | Test22 system | 6,979,321,856 | `508cd08359c6602c36d1bf0a2711dc064bfae509b5773b55933d68ad1f2570a8` |
 | **Test23 system, currently installed** | **6,979,321,856** | `33db1d4d4e5e49f5dc1c06cbd6a0e39b07fd9b6d886941e33f165b7876fccc5a` |
 | **Test20 boot image, retained** (`/boot` signature) | **13,976,627** | `0651435c4575980f2a851bb1f47d59f4a72a1bb56ccebd56904886e8282991b6` |
-| **Test19-derived recovery control, retained** (`/recovery` signature) | **26,625,079** | `1a0c052cbc5561c50bd4dc9fde6d36573bda8beb04e5b5574e04c8a5fe9f6a9f` |
+| **Test24 recovery, installed; first boot pending** (`/recovery` signature) | **26,625,079** | `cb56783c82110e2bc6a9356999f7e4197a5cb56167087dc06e8b9cfc955d43e5` |
 
 Full 64 MiB installed partition readbacks include preserved bytes beyond the
 signed image: boot SHA-256
 `4434306a5c58d4de5ee018a59a04ae3f551d7073efae1fe7a07bd07e468a17d6`;
 recovery SHA-256
-`f5bb5bf5d70ab1e44fd5ac9d888270e219f527d21a67796cf683cef5521ecb35`.
+`52d50365ec73d60af80e235b776069fe5f2b85338a68126c2c0ea00f103170d9`.
 These are verification records, not portable write targets or evidence that
 another device has the same GPT or partition contents.
 
@@ -112,8 +115,40 @@ This establishes a working route, not a repair to menu/PMIC routing. Do not
 blindly copy a BCB sector or leave `boot-recovery` set after a failed attempt.
 Any repeat requires the current misc backup, validated GPT/geometry, exact
 field edits, full readback, and an available clear/restore path. The 4.4
-software-reboot path is unreliable; the verified workflow uses controlled
-physical restarts. [AGENTS sections 50–52](../AGENTS.md) preserve the evidence.
+software-reboot path has been unreliable, although the owner's latest native
+recovery Restart succeeded. Its `userrequested,recovery` boot reason denotes
+normal Restart from recovery, not an explicit recovery-target request.
+[AGENTS sections 50–54](../AGENTS.md) preserve the evidence.
+
+The installed diagnostic recovery passes `--show_text --reason=axon-diag-test19`
+at service startup. Native recovery skips parsing BCB/cache operation arguments
+when explicit command-line arguments are present. It also lacks cache/data
+fstab entries. A Settings factory reset can therefore enter the menu without
+performing the requested wipe. Test24 restores native argument handling and
+those filesystem entries with wait-only flags, and disables the separate cache
+log persister. This candidate preserves the proven kernel/DT and USB setup.
+Full recovery readback verified the installation; boot, misc and both GPT
+copies remained byte-identical. No reboot or data wipe was sent.
+Factory-reset compatibility still needs a RAM-backed scratch test of native
+F2FS formatting flags; the current data must not be used for that test.
+
+## GApps preparation
+
+The owner requested Google apps. Official
+[MindTheGapps Android 16 ARM64, September 15 release](https://github.com/MindTheGapps/16.0.0-arm64/releases/tag/MindTheGapps-16.0.0-arm64-20260915_222150)
+is downloaded, checksum-verified, and staged on both computers; it is **not yet
+installed**. Package size is511,299,883 bytes, SHA-256
+`d60f550e4dc96606644fbbf886a9892d1391a607225e861ceaef27bd999bc6a3`.
+The phone is SDK36/ARM64 and has about4.25GB free in its monolithic system
+filesystem. The package expands to1,138,465,773 bytes before installation.
+
+Because Android has already completed setup, the
+[Lineage installation instructions](https://github.com/LineageOS/lineage_wiki/blob/4edbf1aabad1ed98ab265ced65788a47c1c9e2bb/pages/gapps.md#L17-L22)
+require a fresh factory reset before installing GApps. Permission to erase the
+current data is pending; the earlier reset request is not proof of a successful
+wipe. Do not reinstall the original ROM ZIP over the AT&T adaptations. After
+GApps installation, verify payload files and retained patches explicitly: this
+installer can finish without propagating every copy error.
 
 ## Display controls and feature gap
 
@@ -167,6 +202,8 @@ longer uptime and power transitions. Extra display modes are a separate feature
 project, not grounds to reinstall or format the working phone.
 
 ## Repository entry points
+
+- [Test24 recovery and GApps preparation files](../archive/att-port-2026-10/test24/README.md): bounded recovery writer, builder, diagnostics, tests and reviews; runtime validation remains pending.
 
 - [Investigation files](../archive/att-port-2026-10/README.md): historical patch
   builders, diagnostics, transports, assembly, logger payloads and review

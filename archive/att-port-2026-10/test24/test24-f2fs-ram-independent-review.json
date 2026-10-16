@@ -1,0 +1,29 @@
+{
+  "passed": true,
+  "script_sha256": "5392afda9f3fb17507017ac1e52707253e1aca8a5c9354be86e1dc665e04e26d",
+  "checks_passed": 15,
+  "checks": [
+    "final_shell_syntax",
+    "fixed_256MiB_regular_tmpfs_target_no_arguments",
+    "native_argv_exact_and_bound",
+    "exact_recovery_and_formatter_binary_pins",
+    "no_physical_partition_target",
+    "bounded_loop_ownership_and_size_guards",
+    "both_query_statuses_checked_with_timeouts",
+    "unknown_attachment_query_failure",
+    "unknown_attachment_query_timeout",
+    "unknown_attachment_present",
+    "detached_autoclear_query_failure",
+    "detached_autoclear_query_timeout",
+    "detached_autoclear_still_attached",
+    "successful_cleanup_preserves_original_failure",
+    "foreign_mount_not_unmounted_or_deleted"
+  ],
+  "scope": "Final source review and isolated host-shell cleanup mocks only. No phone, SSH, formatter execution, mounting or device writes.",
+  "formatter_compatibility_proven": false,
+  "limits": [
+    "Operator must apply an outer 180-second run timeout and capture stdout/stderr.",
+    "This receipt approves test confinement, not F2FS feature compatibility; only the actual RAM-file test can establish that.",
+    "Incomplete ownership, attachment-query error/timeout, foreign mount or cleanup failure deliberately preserve scratch artifacts for explicit operator inspection."
+  ]
+}
