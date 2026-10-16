@@ -1,0 +1,119 @@
+#!/system/bin/sh
+# Test the native recovery formatter on a new regular tmpfs file only.
+# Operator must capture private stdout/stderr and bound the whole run to 180s.
+# Never pass a real partition to this script; it accepts no arguments.
+set -eu
+PATH=/system/bin
+export PATH
+umask 077
+[ "$#" = 0 ]
+[ "$(id -u)" = 0 ]
+[ "$(uname -r)" = 4.4.302-cip112-fujisan ]
+[ "$(getprop ro.bootmode)" = recovery ]
+[ "$(getprop init.svc.recovery)" = running ]
+[ "$(getconf PAGESIZE)" = 4096 ]
+hash_is() {
+    observed=$(sha256sum "$1")
+    observed=${observed%% *}
+    [ "$observed" = "$2" ]
+}
+hash_is /system/bin/recovery 492b14d1ef9d3f269716465d4d492689e6a41df018f86e4efac139bf34bee220
+hash_is /system/bin/make_f2fs d16701e710da2f90663aeb2e4cb747f294beca06a3b4d959ee794547c766a332
+hash_is /system/bin/fsck.f2fs c108944028753b7a9de1b2a261bbe5f5f45366ef8b1aad2eded30995b34b37c9
+
+DIR=/tmp/axon-f2fs-native24
+IMG=$DIR/scratch.img
+MNT=$DIR/mount
+LOOP=
+tmp_ok=0
+while IFS=' ' read -r dev point fs opts rest; do
+    if [ "$point" = /tmp ] && [ "$fs" = tmpfs ]; then
+        case ",$opts," in *,rw,*) tmp_ok=$((tmp_ok + 1)) ;; esac
+    fi
+done < /proc/mounts
+[ "$tmp_ok" = 1 ]
+available=0
+while IFS=' ' read -r key value units; do
+    if [ "$key" = MemAvailable: ]; then
+        case "$value" in ''|*[!0-9]*) exit 12 ;; esac
+        [ "$units" = kB ]
+        available=$value
+    fi
+done < /proc/meminfo
+[ "$available" -ge 524288 ]
+if [ -e "$DIR" ] || [ -L "$DIR" ]; then exit 13; fi
+mkdir "$DIR"
+
+loop_owned() {
+    [ -n "$LOOP" ] || return 1
+    case "$LOOP" in /dev/block/loop*) ;; *) return 1 ;; esac
+    number=${LOOP#/dev/block/loop}
+    case "$number" in ''|*[!0-9]*) return 1 ;; esac
+    loop_name=${LOOP##*/}
+    [ -b "$LOOP" ] && [ ! -L "$LOOP" ] || return 1
+    [ "$(cat /sys/class/block/$loop_name/loop/backing_file)" = "$IMG" ] || return 1
+    [ "$(cat /sys/class/block/$loop_name/size)" = 524288 ] || return 1
+}
+
+cleanup() {
+    result=$?
+    trap - EXIT INT TERM
+    mounted=0
+    while IFS=' ' read -r dev point fs opts rest; do
+        if [ "$point" = "$MNT" ]; then
+            # Never unmount a different owner's filesystem after a failed step.
+            [ -n "$LOOP" ] && [ "$dev" = "$LOOP" ] && [ "$fs" = f2fs ] || exit 80
+            mounted=$((mounted + 1))
+        fi
+    done < /proc/mounts
+    [ "$mounted" -le 1 ] || exit 81
+    if [ "$mounted" = 1 ]; then
+        loop_owned || exit 82
+        timeout -k 2 15 umount "$MNT" || { echo SCRATCH_UNMOUNT_FAILED; exit 83; }
+    fi
+    if [ -n "$LOOP" ]; then
+        loop_name=${LOOP##*/}
+        if [ -f /sys/class/block/$loop_name/loop/backing_file ]; then
+            loop_owned || exit 84
+            timeout -k 2 10 losetup -d "$LOOP" || exit 85
+        else
+            # mount may set autoclear and detach the loop during unmount.
+            attachments=$(timeout -k 2 10 losetup -j "$IMG") || exit 86
+            [ -z "$attachments" ] || exit 86
+        fi
+    fi
+    # If attachment timed out before its name was captured, preserve the file
+    # for explicit operator cleanup instead of unlinking an attached backing.
+    attachments=$(timeout -k 2 10 losetup -j "$IMG") || exit 90
+    [ -z "$attachments" ] || exit 90
+    if [ -e "$IMG" ]; then
+        [ -f "$IMG" ] && [ ! -L "$IMG" ] && [ ! -b "$IMG" ] || exit 87
+        rm "$IMG"
+    fi
+    if [ -d "$MNT" ]; then rmdir "$MNT" || exit 88; fi
+    rmdir "$DIR" || exit 89
+    echo NATIVE_F2FS_SCRATCH_CLEANUP_COMPLETE
+    exit "$result"
+}
+trap cleanup EXIT
+trap 'exit 124' INT TERM
+mkdir "$MNT"
+truncate -s 268435456 "$IMG"
+[ -f "$IMG" ] && [ ! -L "$IMG" ] && [ ! -b "$IMG" ]
+[ "$(stat -c %s "$IMG")" = 268435456 ]
+
+# Exact format_volume argv for a 4096-byte-page F2FS entry with zero length,
+# no casefold and no compression. Only the target is a regular RAM file.
+echo NATIVE_F2FS_FORMAT_BEGIN
+timeout -k 2 35 /system/bin/make_f2fs -g android -O project_quota,extra_attr -b 4096 "$IMG"
+echo NATIVE_F2FS_FORMAT_PASSED
+LOOP=$(timeout -k 2 10 losetup -f -s "$IMG")
+loop_owned
+timeout -k 2 20 mount -t f2fs -o nosuid,nodev,noexec,noatime,discard,resuid=1000,resgid=1000 "$LOOP" "$MNT"
+loop_owned
+printf 'axon-test24-native-f2fs-ram-capability\n' > "$MNT/probe"
+[ "$(cat "$MNT/probe")" = axon-test24-native-f2fs-ram-capability ]
+echo NATIVE_F2FS_KERNEL_MOUNT_AND_IO_PASSED
+timeout -k 2 15 umount "$MNT"
+timeout -k 2 35 /system/bin/fsck.f2fs --dry-run "$IMG"
+echo NATIVE_F2FS_DRY_RUN_CHECK_PASSED

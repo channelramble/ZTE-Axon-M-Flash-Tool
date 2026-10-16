@@ -1,0 +1,23 @@
+"""Root-only bounded command capture on MacBook; does not select an operation itself."""
+from pathlib import Path
+import argparse,hashlib,json,os,shlex,time
+from capture_test22_adb import ADB,PORT,Capture,bounded_process
+p=argparse.ArgumentParser();p.add_argument('script');p.add_argument('sha256');p.add_argument('output');p.add_argument('--phase');p.add_argument('--seconds',type=int,default=60);a=p.parse_args()
+os.umask(0o077)
+r=Path(__file__).resolve().parent;script=r/a.script
+assert script.is_file() and not script.is_symlink()
+body=script.read_bytes();assert hashlib.sha256(body).hexdigest()==a.sha256
+assert 1<=a.seconds<=600
+out=r/a.output;out.mkdir(exist_ok=False)
+raw,rc,status=bounded_process([str(ADB),'-P',PORT,'devices'],10,65536)
+rows=[x.split() for x in raw.decode().splitlines()[1:] if len(x.split())>=2]
+assert status=='ok' and rc==0 and len(rows)==1 and rows[0][1]=='recovery'
+c=Capture(rows[0][0],time.monotonic()+a.seconds+10)
+command=('set -- '+shlex.quote(a.phase)+'\n' if a.phase else 'set --\n')+body.decode()
+log,meta=c.remote(command,524288,a.seconds)
+(out/'output.txt').write_bytes(log)
+record={'complete':meta['status']=='ok','script_sha256':a.sha256,'phase':a.phase,'result':meta,'files':{'output.txt':{'bytes':len(log),'sha256':hashlib.sha256(log).hexdigest()}}}
+(out/'capture.json').write_text(json.dumps(record,indent=2)+'\n')
+print(json.dumps(record),flush=True)
+print(log.decode(errors='replace')[-10000:],flush=True)
+assert record['complete'], 'Operation incomplete; inspect evidence before any retry'

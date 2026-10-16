@@ -1,0 +1,8 @@
+{
+  "passed": true,
+  "source_sha256": "175937add36f50b7026c4450565ba78fe2a0144dfc48742787bd5eb50469af23",
+  "output_sha256": "a7dffda8371a25527131f3520bb9c7a369943e3eab21c7c443921e6bee8a61f5",
+  "manifest_sha256": "503804d1e44b2cfe317b6ed39133d4cb2523b44fe483b308cf41c17a1ca95a8e",
+  "changes": "Four AND-list assertions split into independent fail-closed commands; native pipefail and fixed PATH added; expected files/metadata unchanged.",
+  "phone_operations": false
+}

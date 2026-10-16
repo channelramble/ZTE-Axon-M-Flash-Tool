@@ -1,0 +1,70 @@
+#!/usr/bin/env python3
+"""Separate one-shot reset, gated by Test23/Test24 and forced-BCB two-Mac receipts."""
+from pathlib import Path
+import argparse,hashlib,json,os,signal
+if hashlib.sha256((Path(__file__).resolve().parent/'run_test24_recovery_bcb.py').read_bytes()).hexdigest() != 'cf697f4a351a023d023e105fbec46e2be945e353be447ecfab74e82c6bbe5988':
+    raise ValueError('Reviewed Test24 BCB runner dependency changed')
+from run_test24_recovery_bcb import (ROOT,BASE_SHA,FORCED_SHA,PINS,BOUNDS,Reader,
+    baseline,installed_gate,require,load,save,file_sha,checked_file)
+
+
+def gate(before,installed,recovery_installed):
+    baseline(before); installation=installed_gate(installed,recovery_installed)
+    out=ROOT/'test24-recovery-bcb-setup'
+    state,receipt=load(out/'transaction.json'),load(out/'local-verification.json')
+    require(state['complete'] and state['mode']=='setup' and state['program_ack']
+            and state['full_readback_verified'] and not state.get('error') and not state['reset_sent']
+            and state['installation_receipt_pins']==installation, 'BCB setup not complete')
+    require(receipt['complete'] and receipt['both_macs_verified'] and receipt['mode']=='setup'
+            and receipt['transaction_sha256']==file_sha(out/'transaction.json')
+            and receipt['baseline_misc_sha256']==BASE_SHA and receipt['misc_sha256']==FORCED_SHA
+            and receipt['full_misc_readback_verified']
+            and receipt['protected_sha256']=={k:v for k,v in PINS.items() if k!='misc'},
+            'BCB two-Mac receipt mismatch')
+    for name,(start,count) in BOUNDS.items():
+        checked_file(out/'after'/(name+'.bin'),count*512,FORCED_SHA if name=='misc' else PINS[name])
+    review=load(ROOT/'test24-recovery-bcb-independent-review.json')
+    require(review['passed'] and review['reset_sha256']==file_sha(Path(__file__)), 'Reset review mismatch')
+
+
+def main():
+    os.umask(0o077)
+    p=argparse.ArgumentParser(description=__doc__)
+    p.add_argument('--before',type=Path,default=ROOT/'test25-edl-before')
+    p.add_argument('--installed',type=Path,default=ROOT/'test23-edl-system-write')
+    p.add_argument('--recovery-installed',type=Path,default=ROOT/'test24-recovery-install-v1')
+    p.add_argument('--execute',action='store_true')
+    a=p.parse_args(); gate(a.before,a.installed,a.recovery_installed)
+    if not a.execute:
+        print(json.dumps({'files_only_validated':True,'reset_sent':False})); return
+    out=ROOT/'test24-recovery-bcb-reset';out.mkdir(mode=0o700,exist_ok=False)
+    state={'reset_attempted':False,'reset_sent':False,'reset_ack':False,'automatic_retry':False}
+    save(out/'reset-result.json',state)
+    def deadline(*unused):raise TimeoutError('Reset deadline; no retry')
+    signal.signal(signal.SIGALRM,deadline);signal.alarm(60)
+    try:
+        with (out/'reset.xml.log').open('xb') as log:
+            c=Reader(log)
+            try:
+                c.configure()
+                for name in ('gpt','misc'):
+                    start,count=BOUNDS[name];row=c.read(start,count,out/(name+'.bin'))
+                    expected=FORCED_SHA if name=='misc' else PINS[name]
+                    require(row['sha256']==expected and row['final_ack'] is True,'Fresh reset guard mismatch')
+                    checked_file(out/(name+'.bin'),count*512,expected)
+                xml=b'<?xml version="1.0" ?><data><power value="reset"/></data>'
+                log.write(b'TX '+xml+b'\n');log.flush()
+                state['reset_attempted']=True;save(out/'reset-result.json',state)
+                require(c.ep_out.write(xml,timeout=3000)==len(xml),'Short reset XML; no retry')
+                state['reset_sent']=True;save(out/'reset-result.json',state)
+                try:c.response(timeout=5);state['reset_ack']=True
+                except Exception as exc:state['response_note']=type(exc).__name__+': '+str(exc)
+                save(out/'reset-result.json',state)
+            finally:c.close()
+    except BaseException as exc:
+        state['error']=type(exc).__name__+': '+str(exc);save(out/'reset-result.json',state);raise
+    finally:signal.alarm(0)
+    print(json.dumps(state))
+
+
+if __name__=='__main__':main()

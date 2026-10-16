@@ -1,0 +1,36 @@
+{
+  "passed": true,
+  "runner_sha256": "fe6c50c935a9b714297d3e9c778b6908a7614ce4a0e7175370763d06de9acfca",
+  "checks_passed": 23,
+  "checks": [
+    "valid framing chunk 1",
+    "valid framing chunk 2",
+    "valid framing chunk 7",
+    "valid framing chunk 64",
+    "valid framing chunk 1024",
+    "missing header",
+    "truncated",
+    "extra payload",
+    "native read failure",
+    "trailing output",
+    "oversized tail",
+    "guard shell parses",
+    "exact range total and fixed system geometry",
+    "no userdata range",
+    "no mount/service/reboot command",
+    "stream success",
+    "stream native failure",
+    "stream adb failure",
+    "stream short stream",
+    "source syntax",
+    "Revision scope exactly two standalone required-condition templates; all stream code unchanged",
+    "Revised guard parses with bash -n",
+    "Every required block-node and non-symlink check is standalone"
+  ],
+  "phone_operations": false,
+  "limits": [
+    "Offline synthetic streams only; no actual phone transport exercised.",
+    "Writer and mount guards are point-in-time checks, supported by native full digest equality and final protected rechecks."
+  ],
+  "previous_runner_sha256": "6bdee326790051dd8af1ea28e06ff24c12f882c95ea2a3602ad1f5a37aeffc8e"
+}

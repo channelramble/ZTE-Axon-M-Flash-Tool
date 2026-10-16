@@ -62,3 +62,11 @@ The scripts use Python 3.9+; individual historical paths additionally use
 OpenSSL, e2fsprogs, PyUSB, adb 29.0.6, recovered kernel symbols or external
 disassembly tools. Dependencies and private artifacts are referenced in source
 but are not vendored. See [source notes](source/README.md) for more detail.
+
+## Recovery and GApps follow-up
+
+[Test24](test24/README.md) records the native recovery argument/fstab repair.
+[Test25](test25/README.md) records the successful native reset, original GApps
+installation, file verification, and complete readback tooling. Each has a
+separate sanitized-source manifest; later hardware outcomes are in the status
+document. No userdata or raw partition contents are published.

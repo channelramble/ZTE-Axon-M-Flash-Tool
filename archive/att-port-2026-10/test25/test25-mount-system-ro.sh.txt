@@ -1,0 +1,19 @@
+#!/system/bin/sh
+set -eu
+set -o pipefail
+PATH=/system/bin
+export PATH
+[ "$(id -u)" = 0 ]
+[ "$(getprop ro.bootmode)" = recovery ]
+[ "$(sha256sum /system/bin/recovery | cut -d ' ' -f1)" = 492b14d1ef9d3f269716465d4d492689e6a41df018f86e4efac139bf34bee220 ]
+[ "$(cat /sys/class/block/mmcblk0p20/start)" = 1312768 ]
+[ "$(cat /sys/class/block/mmcblk0p20/size)" = 13631488 ]
+[ "$(cat /sys/class/block/mmcblk0p20/dev)" = 179:20 ]
+[ -d /mnt/system ]; [ ! -L /mnt/system ]
+while read -r dev point rest; do
+ [ "$point" != /mnt/system ]
+ [ "$(readlink -f "$dev")" != /dev/block/mmcblk0p20 ]
+done < /proc/mounts
+sync
+mount -t ext4 -o ro /dev/block/mmcblk0p20 /mnt/system
+printf 'SYSTEM_MOUNTED_READONLY_FOR_VERIFICATION\n'

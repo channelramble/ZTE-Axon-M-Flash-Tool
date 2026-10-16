@@ -1,0 +1,297 @@
+#!/usr/bin/env python3
+"""Read-only full Test25 after snapshot. Local preflight unless --execute.
+
+No mount, reboot, service control, device write, or userdata read. Run only after
+installer exit and system unmount. Root remains the sole phone operator.
+"""
+from pathlib import Path
+import argparse
+import hashlib
+import json
+import os
+import re
+import secrets
+import selectors
+import shlex
+import shutil
+import subprocess
+import time
+
+ROOT = Path(__file__).resolve().parent
+DEPENDENCY_SHA = '86e948c59bb98aa8e8375c32db55cd617a4a44dc1f10c5bd977231522520df13'
+if hashlib.sha256((ROOT / 'capture_test22_recovery_bcb_v2.py').read_bytes()).hexdigest() != DEPENDENCY_SHA:
+    raise ValueError('Reviewed recovery Capture dependency changed')
+from capture_test22_recovery_bcb_v2 import (ADB, PORT, Capture, bounded_process,
+    recovery_identity_command, verify_recovery_identity)
+
+WHOLE_SECONDS = 2400
+# name: node, skip sectors within node, count sectors, protected digest (None=unknown).
+FILES = {
+    'gpt': ('mmcblk0', 0, 14, '7f1e4fd44e69e004189f0256ce6d35addfb1e3dbfe1cd55bfd2047b580b1e891'),
+    'gpt-backup': ('mmcblk0', 122142687, 33, 'b76a0353e9b841984f434f8f7d875f76b18ba1d4c01db15958d13e3525b03990'),
+    'boot': ('mmcblk0p18', 0, 131072, '4434306a5c58d4de5ee018a59a04ae3f551d7073efae1fe7a07bd07e468a17d6'),
+    'recovery': ('mmcblk0p19', 0, 131072, '52d50365ec73d60af80e235b776069fe5f2b85338a68126c2c0ea00f103170d9'),
+    'misc': ('mmcblk0p38', 0, 2048, '07e3021342d8a12056e9faf36ade8832e1d24e8daaa6930516da3ed88412183e'),
+    'system': ('mmcblk0p20', 0, 13631488, None),
+}
+GEOMETRY = {
+    'mmcblk0p18': (1050624, 131072, '179:18'),
+    'mmcblk0p19': (1181696, 131072, '179:19'),
+    'mmcblk0p20': (1312768, 13631488, '179:20'),
+    'mmcblk0p38': (18626584, 2048, '259:6'),
+}
+NATIVE = {
+    '/system/bin/init': '714ecace1ad409d588f497d51c738cf0bdb0a1d23ee3029c5b976db5f0e468eb',
+    '/system/etc/init/hw/init.rc': '3f589eb1b50b408e6d20245da99ee789d20407d4398412af9965e90c1e01327e',
+    '/system/etc/recovery.fstab': '697d1f6c7f9e90181aa67cb706cb00a50a69a202a835ccc3aee104cf16c1fafb',
+}
+
+
+def require(value, message):
+    if not value:
+        raise ValueError(message)
+
+
+def file_sha(path):
+    h = hashlib.sha256()
+    with path.open('rb') as f:
+        for b in iter(lambda: f.read(1024 * 1024), b''):
+            h.update(b)
+    return h.hexdigest()
+
+
+def save(out, state):
+    tmp = out / '.capture.tmp'
+    with tmp.open('x') as f:
+        json.dump(state, f, indent=2); f.write('\n'); f.flush(); os.fsync(f.fileno())
+    tmp.replace(out / 'capture.json')
+    fd = os.open(out, os.O_RDONLY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def baseline(before):
+    for name, (_, _, count, expected) in FILES.items():
+        if expected is None:
+            continue
+        p = before / (name + '.bin')
+        require(p.is_file() and not p.is_symlink() and p.stat().st_size == count * 512,
+                'Baseline size/type mismatch: ' + name)
+        require(file_sha(p) == expected, 'Baseline hash mismatch: ' + name)
+    data = (before / 'misc.bin').read_bytes()
+    require(not any(data[:2048]), 'Baseline has pending BCB')
+    return data
+
+
+def guard_command():
+    lines = ['set -eu', 'set -o pipefail', 'PATH=/system/bin; export PATH', '[ "$(id -u)" = 0 ]',
+             '[ "$(getprop ro.bootmode)" = recovery ]', '[ "$(getprop sys.boot_completed)" != 1 ]',
+             '[ "$(getprop init.svc.recovery)" = running ]',
+             '[ -z "$(pidof system_server zygote zygote64 update_engine update-binary updater fastbootd 2>/dev/null || true)" ]',
+             '[ "$(cat /sys/class/block/mmcblk0/queue/logical_block_size)" = 512 ]',
+             '[ "$(cat /sys/class/block/mmcblk0/size)" = 122142720 ]',
+             '[ -b /dev/block/mmcblk0 ]', '[ ! -L /dev/block/mmcblk0 ]',
+             '[ "$(stat -c %t:%T /dev/block/mmcblk0)" = b3:0 ]',
+             '[ "$(blockdev --getsize64 /dev/block/mmcblk0)" = 62537072640 ]']
+    for node, (start, count, dev) in GEOMETRY.items():
+        ma, mi = map(int, dev.split(':'))
+        lines += [f'[ -b /dev/block/{node} ]', f'[ ! -L /dev/block/{node} ]',
+                  f'[ "$(cat /sys/class/block/{node}/start)" = {start} ]',
+                  f'[ "$(cat /sys/class/block/{node}/size)" = {count} ]',
+                  f'[ "$(cat /sys/class/block/{node}/dev)" = {dev} ]',
+                  f'[ "$(stat -c %t:%T /dev/block/{node})" = {ma:x}:{mi:x} ]',
+                  f'[ "$(blockdev --getsize64 /dev/block/{node})" = {count * 512} ]']
+    for path, digest in NATIVE.items():
+        lines += [f'h=$(sha256sum {path}); [ "${{h%% *}}" = {digest} ]']
+    # All visible process namespaces, not just adb's; any mount of a captured
+    # block device is rejected. Open raw writer descriptors are rejected too.
+    lines += [
+        'for proc in /proc/[0-9]*; do',
+        '  [ -d "$proc" ] || continue',
+        '  if [ -r "$proc/mountinfo" ]; then',
+        '    awk \'$3=="179:0"||$3=="179:18"||$3=="179:19"||$3=="179:20"||$3=="259:6" {bad=1} END {exit bad}\' "$proc/mountinfo"',
+        '  fi',
+        '  for fd in "$proc"/fd/*; do',
+        '    target=$(readlink -f "$fd" 2>/dev/null) || continue',
+        '    case "$target" in /dev/block/mmcblk0|/dev/block/mmcblk0p18|/dev/block/mmcblk0p19|/dev/block/mmcblk0p20|/dev/block/mmcblk0p38)',
+        '      info="$proc/fdinfo/${fd##*/}"; [ -r "$info" ] || { [ ! -e "$fd" ]; continue; }',
+        '      flags=$(awk \'$1=="flags:" {print $2}\' "$info")',
+        '      case "$flags" in ""|*[!0-7]*) exit 35 ;; esac',
+        '      [ "$((0$flags & 3))" = 0 ] ;;',
+        '    esac',
+        '  done',
+        'done',
+        'h=$(sha256sum /proc/1/exe); [ "${h%% *}" = ' + NATIVE['/system/bin/init'] + ' ]',
+        'b=$(dd if=/dev/block/mmcblk0p38 bs=2048 count=1 2>/dev/null | sha256sum)',
+        '[ "${b%% *}" = e5a00aa9991ac8a5ee3109844d84a55583bd20572ad3ffcd42792f3c36b183ad ]',
+    ]
+    return '\n'.join(lines) + '\n'
+
+
+def remote(capture, command, seconds=30):
+    data, info = capture.remote(command, 8192, seconds)
+    require(info.get('status') == 'ok', 'Guard/native digest command failed')
+    return data
+
+
+def guard(capture, expected=None):
+    body, info = capture.remote(recovery_identity_command(), 4096, 20)
+    require(verify_recovery_identity(body, info), 'Exact running native recovery identity failed')
+    body = remote(capture, guard_command() + 'sha256sum /proc/sys/kernel/random/boot_id\n', 60)
+    fields = body.decode('ascii').split()
+    require(len(fields) == 2 and re.fullmatch('[0-9a-f]{64}', fields[0]) and
+            fields[1] == '/proc/sys/kernel/random/boot_id', 'Malformed boot identity')
+    require(expected is None or expected == fields[0], 'Device restarted during capture')
+    return fields[0]
+
+
+def read_command(row):
+    node, skip, count, _ = row
+    if skip == 0 and count % 2048 == 0:
+        return f'dd if=/dev/block/{node} bs=1048576 count={count // 2048} 2>/dev/null'
+    return f'dd if=/dev/block/{node} bs=512 skip={skip} count={count} 2>/dev/null'
+
+
+class BinaryFrame:
+    """Header bounded, body exact length, terminal success marker exact."""
+    def __init__(self, sink, size, begin, end):
+        self.sink, self.size, self.begin, self.end = sink, size, begin, end
+        self.header = bytearray(); self.tail = bytearray()
+        self.started = False; self.count = 0; self.digest = hashlib.sha256()
+
+    def feed(self, data):
+        if not self.started:
+            self.header.extend(data)
+            at = self.header.find(self.begin)
+            require(at <= 8192 if at >= 0 else len(self.header) <= 8192,
+                    'Missing or oversized stream header')
+            if at < 0:
+                return
+            data = bytes(self.header[at + len(self.begin):]); self.header.clear(); self.started = True
+        n = min(len(data), self.size - self.count)
+        if n:
+            self.sink.write(data[:n]); self.digest.update(data[:n]); self.count += n
+        self.tail.extend(data[n:])
+        require(len(self.tail) <= 256, 'Overlong binary stream')
+
+    def finish(self):
+        require(self.started and self.count == self.size, 'Truncated binary stream')
+        require(bytes(self.tail) == self.end + b'0\n', 'Native read failed or unexpected stream trailer')
+        return self.digest.hexdigest()
+
+
+def stream(capture, row, path):
+    remaining = capture.deadline - time.monotonic()
+    require(remaining > 10, 'Transaction time budget exhausted')
+    seconds = int(min(1200, remaining - 5))
+    nonce = secrets.token_hex(12)
+    begin = ('\nAXON25_BEGIN_' + nonce + '\n').encode()
+    end = ('\nAXON25_END_' + nonce + ':').encode()
+    body = ('PATH=/system/bin; export PATH; printf %s ' + shlex.quote(begin.decode()) + '; ' +
+            read_command(row))
+    wrapper = ('/system/bin/timeout -k 2 ' + str(seconds) + ' /system/bin/sh -c ' +
+               shlex.quote(body) + ' 2>/dev/null; rc=$?; printf "%s%s\\n" ' +
+               shlex.quote(end.decode()) + ' "$rc"')
+    command = [str(ADB), '-P', PORT, '-s', capture.serial, 'exec-out',
+               '/system/bin/sh -c ' + shlex.quote(wrapper)]
+    stop = time.monotonic() + seconds + 4
+    with path.open('xb') as sink:
+        parser = BinaryFrame(sink, row[2] * 512, begin, end)
+        process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        sel = selectors.DefaultSelector(); stderr_bytes = 0; last_progress = time.monotonic()
+        try:
+            for pipe in (process.stdout, process.stderr):
+                os.set_blocking(pipe.fileno(), False); sel.register(pipe, selectors.EVENT_READ)
+            while sel.get_map():
+                left = stop - time.monotonic(); require(left > 0, 'Host stream timeout')
+                for key, _ in sel.select(min(left, .25)):
+                    chunk = os.read(key.fd, 1024 * 1024)
+                    if not chunk:
+                        sel.unregister(key.fileobj); continue
+                    if key.fileobj is process.stdout:
+                        parser.feed(chunk)
+                    else:
+                        stderr_bytes += len(chunk); require(stderr_bytes <= 65536, 'ADB stderr exceeds bound')
+                if time.monotonic() - last_progress >= 30:
+                    print(path.name + ': ' + str(parser.count) + '/' + str(parser.size) + ' bytes', flush=True)
+                    last_progress = time.monotonic()
+            require(process.wait(timeout=max(.1, min(2, stop-time.monotonic()))) == 0, 'ADB stream failed')
+            digest = parser.finish(); sink.flush(); os.fsync(sink.fileno())
+            return digest
+        finally:
+            sel.close()
+            if process.poll() is None:
+                process.kill(); process.wait(timeout=5)
+            process.stdout.close(); process.stderr.close()
+
+
+def native_digest(capture, row):
+    node, skip, count, _ = row
+    command = ('set -e; set -o pipefail; PATH=/system/bin; export PATH; ' +
+               (f'sha256sum /dev/block/{node}' if node != 'mmcblk0' else
+                read_command(row) + ' | sha256sum'))
+    fields = remote(capture, command, 300).decode('ascii').split()
+    expected_name = '/dev/block/' + node if node != 'mmcblk0' else '-'
+    require(len(fields) == 2 and re.fullmatch('[0-9a-f]{64}', fields[0]) and
+            fields[1] == expected_name, 'Malformed native full digest')
+    return fields[0]
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument('--before', type=Path, default=ROOT / 'test25-edl-before')
+    ap.add_argument('--output', type=Path, default=ROOT / 'test25-after')
+    ap.add_argument('--execute', action='store_true')
+    args = ap.parse_args(); os.umask(0o077)
+    misc_before = baseline(args.before)
+    require(not args.output.exists(), 'Output already exists; never overwrite or resume')
+    if not args.execute:
+        print('Local protected baseline preflight passed; no device access.'); return
+    require(shutil.disk_usage(args.output.parent).free >= sum(r[2] * 512 for r in FILES.values()) + 268435456,
+            'Insufficient host space for full after snapshot')
+    raw, rc, status = bounded_process([str(ADB), '-P', PORT, 'version'], 10, 4096)
+    require(status == 'ok' and rc == 0 and b'Version 29.0.6-' in raw, 'ADB 29.0.6 required')
+    raw, rc, status = bounded_process([str(ADB), '-P', PORT, 'devices'], 10, 65536)
+    rows = [x.split() for x in raw.decode().splitlines()[1:] if len(x.split()) >= 2]
+    require(status == 'ok' and rc == 0 and len(rows) == 1 and rows[0][1] == 'recovery',
+            'Exactly one recovery-mode ADB device required')
+    capture = Capture(rows[0][0], time.monotonic() + WHOLE_SECONDS)
+    boot_id = guard(capture)
+    args.output.mkdir(mode=0o700, exist_ok=False)
+    state = {'complete': False, 'read_only': True, 'userdata_read': False,
+             'runner_sha256': file_sha(Path(__file__)), 'files': {}, 'boot_id_sha256': boot_id}
+    save(args.output, state)
+    try:
+        for name, row in FILES.items():
+            print('Capturing ' + name, flush=True)
+            guard(capture, boot_id)
+            path = args.output / (name + '.bin')
+            host_digest = stream(capture, row, path)
+            device_digest = native_digest(capture, row)
+            require(host_digest == device_digest, 'Host/device full digest mismatch: ' + name)
+            require(row[3] is None or host_digest == row[3], 'Protected partition changed: ' + name)
+            require(path.stat().st_size == row[2] * 512, 'Output size mismatch: ' + name)
+            if name == 'misc':
+                require(path.read_bytes() == misc_before, 'Misc changed outside or inside BCB')
+            guard(capture, boot_id)
+            state['files'][name] = {'file': path.name, 'bytes': path.stat().st_size,
+                                    'sha256': host_digest, 'native_sha256': device_digest,
+                                    'native_full_digest_verified': True}
+            save(args.output, state)
+            print(name + ': exact length and native digest verified', flush=True)
+        # Recheck protected ranges after the long system stream as well.
+        for name, row in FILES.items():
+            if row[3] is not None:
+                require(native_digest(capture, row) == row[3], 'Final protected digest mismatch: ' + name)
+        guard(capture, boot_id)
+        state['complete'] = True; state['protected_unchanged'] = True
+        state['all_full_native_digests_verified'] = True; save(args.output, state)
+        print('Complete read-only full after snapshot verified.', flush=True)
+    except BaseException as error:
+        state['failure_type'] = type(error).__name__; save(args.output, state); raise
+
+
+if __name__ == '__main__':
+    main()

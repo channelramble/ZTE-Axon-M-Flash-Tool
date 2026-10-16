@@ -1,0 +1,79 @@
+import hashlib
+import importlib.util
+import json
+from pathlib import Path
+import tempfile
+import unittest
+import zlib
+
+spec=importlib.util.spec_from_file_location('delta',Path(__file__).with_name('system_block_delta.py'))
+d=importlib.util.module_from_spec(spec); spec.loader.exec_module(d)
+
+class DeltaTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp=tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
+        self.p=Path(self.tmp.name); self.base=self.p/'base'; self.after=self.p/'after'; self.out=self.p/'delta'
+        self.b=b'A'*d.CHUNK+b'B'*d.CHUNK+b'C'*37
+        self.a=b'X'*d.CHUNK+b'B'*d.CHUNK+b'Y'*37
+        self.base.write_bytes(self.b);self.after.write_bytes(self.a)
+        self.bs=d.sha(self.b);self.ts=d.sha(self.a);self.n=len(self.b)
+    def create(self): return d.create(self.base,self.after,self.out,self.n,self.bs,self.ts)
+    def verify(self): return d.verify(self.base,self.out,self.n,self.bs,self.ts)
+    def manifest(self): return json.loads((self.out/'manifest.json').read_text())
+    def save(self,m): (self.out/'manifest.json').write_text(json.dumps(m))
+    def test_roundtrip_partial_chunk_and_unchanged(self):
+        r=self.create();self.assertTrue(r['passed']);self.assertEqual(r['changed_chunks'],2)
+        self.assertEqual(self.verify(),r);self.assertEqual(self.base.read_bytes(),self.b);self.assertEqual(self.after.read_bytes(),self.a)
+    def test_existing_output_refused(self):
+        self.create(); original=(self.out/'manifest.json').read_bytes()
+        with self.assertRaises(ValueError):self.create()
+        self.assertEqual((self.out/'manifest.json').read_bytes(),original)
+    def test_wrong_before_pin_no_output(self):
+        with self.assertRaises(ValueError):d.create(self.base,self.after,self.out,self.n,'0'*64,self.ts)
+        self.assertFalse(self.out.exists())
+    def test_wrong_after_pin_no_output(self):
+        with self.assertRaises(ValueError):d.create(self.base,self.after,self.out,self.n,self.bs,'0'*64)
+        self.assertFalse(self.out.exists())
+    def test_modified_unchanged_baseline_chunk(self):
+        self.create();self.base.write_bytes(self.b[:d.CHUNK]+b'Z'+self.b[d.CHUNK+1:])
+        with self.assertRaises(ValueError):self.verify()
+    def test_modified_changed_baseline_chunk(self):
+        self.create();self.base.write_bytes(b'Z'+self.b[1:])
+        with self.assertRaises(ValueError):self.verify()
+    def test_chunk_corruption(self):
+        self.create();p=self.out/'00000000.zlib';a=p.read_bytes();p.write_bytes(a[:-1]+bytes([a[-1]^1]))
+        with self.assertRaises(ValueError):self.verify()
+    def test_reordered_chunks(self):
+        self.create();m=self.manifest();m['changed_chunks'].reverse();self.save(m)
+        with self.assertRaises(ValueError):self.verify()
+    def test_duplicate_chunks(self):
+        self.create();m=self.manifest();m['changed_chunks'][1]=m['changed_chunks'][0];self.save(m)
+        with self.assertRaises(ValueError):self.verify()
+    def test_outside_offset(self):
+        self.create();m=self.manifest();m['changed_chunks'][0]['offset']=1;self.save(m)
+        with self.assertRaises(ValueError):self.verify()
+    def test_trailing_compressed_data(self):
+        self.create();p=self.out/'00000000.zlib';a=p.read_bytes()+b'junk';p.write_bytes(a)
+        m=self.manifest();r=m['changed_chunks'][0];r['compressed_bytes']=len(a);r['compressed_sha256']=d.sha(a);m['compressed_bytes']+=4;self.save(m)
+        with self.assertRaises(ValueError):self.verify()
+    def test_inflate_bomb_bounded(self):
+        with self.assertRaises(ValueError):d.inflate_exact(zlib.compress(b'X'*(d.CHUNK+1)),d.CHUNK)
+    def test_symlink_chunk(self):
+        self.create();p=self.out/'00000000.zlib';q=self.p/'chunk';p.rename(q);p.symlink_to(q)
+        with self.assertRaises(ValueError):self.verify()
+    def test_symlink_baseline(self):
+        q=self.p/'link';q.symlink_to(self.base)
+        with self.assertRaises(ValueError):d.create(q,self.after,self.out,self.n,self.bs,self.ts)
+    def test_extra_file(self):
+        self.create();(self.out/'unexpected').write_text('x')
+        with self.assertRaises(ValueError):self.verify()
+    def test_byte_cap_incomplete_unusable(self):
+        with self.assertRaises(ValueError):d.create(self.base,self.after,self.out,self.n,self.bs,self.ts,max_compressed=1)
+        self.assertFalse((self.out/'manifest.json').exists())
+    def test_wrong_size(self):
+        with self.assertRaises(ValueError):d.create(self.base,self.after,self.out,self.n+1,self.bs,self.ts)
+    def test_no_changes(self):
+        self.after.write_bytes(self.b);r=d.create(self.base,self.after,self.out,self.n,self.bs,self.bs)
+        self.assertEqual(r['changed_chunks'],0)
+
+if __name__=='__main__': unittest.main(verbosity=2)

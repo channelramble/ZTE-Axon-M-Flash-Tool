@@ -1,0 +1,237 @@
+#!/usr/bin/env python3
+"""Offline, non-executable compressed backup delta; never writes a source image.
+
+create BASE AFTER NEW_DIR --base-sha256 ... --after-sha256 ... --bytes ...
+verify BASE DELTA_DIR --base-sha256 ... --after-sha256 ... --bytes ...
+Verification streams the full reconstructed image into SHA256 without saving it.
+A delta is usable only together with the exact baseline and complete manifest.
+"""
+import argparse
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import stat
+import time
+import zlib
+
+CHUNK = 1024 * 1024
+MAX_IMAGE = 16 * 1024**3
+MAX_MANIFEST = 8 * 1024**2
+FORMAT = 'axon-system-block-delta-v1'
+
+
+def require(ok, why):
+    if not ok:
+        raise ValueError(why)
+
+
+def sha(data):
+    return hashlib.sha256(data).hexdigest()
+
+
+def pin(value):
+    require(isinstance(value, str) and re.fullmatch('[0-9a-f]{64}', value), 'invalid SHA256')
+    return value
+
+
+def regular(path):
+    path = Path(path)
+    info = path.lstat()
+    require(stat.S_ISREG(info.st_mode), 'not a regular non-symlink file')
+    return path, info
+
+
+def identity(info):
+    return (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+
+
+def check_time(deadline):
+    require(time.monotonic() < deadline, 'offline deadline exceeded')
+
+
+def checked_open(path, expected_bytes=None):
+    path, info = regular(path)
+    if expected_bytes is not None:
+        require(info.st_size == expected_bytes, 'file byte length mismatch')
+    f = path.open('rb')
+    require(identity(os.fstat(f.fileno())) == identity(info), 'file changed while opening')
+    return f, info
+
+
+def finish_file(f, info):
+    require(identity(os.fstat(f.fileno())) == identity(info), 'input modified during operation')
+
+
+def hash_file(path, size, deadline):
+    f, info = checked_open(path, size)
+    h = hashlib.sha256()
+    with f:
+        while True:
+            check_time(deadline)
+            data = f.read(CHUNK)
+            if not data:
+                break
+            h.update(data)
+        finish_file(f, info)
+    return h.hexdigest()
+
+
+def write_new(path, data):
+    with Path(path).open('xb') as f:
+        f.write(data)
+        f.flush()
+        os.fsync(f.fileno())
+
+
+def validate_parameters(size, base_sha, after_sha):
+    require(type(size) is int and 0 < size <= MAX_IMAGE, 'invalid image size')
+    pin(base_sha)
+    pin(after_sha)
+
+
+def create(base, after, output, size, base_sha, after_sha, max_compressed=2*1024**3, seconds=1800):
+    validate_parameters(size, base_sha, after_sha)
+    require(type(max_compressed) is int and 0 < max_compressed <= MAX_IMAGE, 'invalid delta byte cap')
+    deadline = time.monotonic() + seconds
+    output = Path(output)
+    require(not output.exists() and not output.is_symlink(), 'output already exists')
+    require(Path(base).resolve() != Path(after).resolve(), 'source and target must be different files')
+    require(hash_file(base, size, deadline) == base_sha, 'baseline SHA256 mismatch')
+    require(hash_file(after, size, deadline) == after_sha, 'after SHA256 mismatch')
+    output.mkdir(mode=0o700)
+    chunks = []
+    total = 0
+    hb, ha = hashlib.sha256(), hashlib.sha256()
+    fb, ib = checked_open(base, size)
+    fa, ia = checked_open(after, size)
+    with fb, fa:
+        for index, offset in enumerate(range(0, size, CHUNK)):
+            check_time(deadline)
+            count = min(CHUNK, size-offset)
+            before, target = fb.read(count), fa.read(count)
+            require(len(before) == count and len(target) == count, 'short image read')
+            hb.update(before)
+            ha.update(target)
+            if before == target:
+                continue
+            packed = zlib.compress(target, 9)
+            total += len(packed)
+            require(total <= max_compressed, 'compressed delta exceeds byte cap; incomplete directory retained')
+            name = f'{index:08d}.zlib'
+            write_new(output / name, packed)
+            chunks.append({'index': index, 'offset': offset, 'bytes': count,
+                           'before_sha256': sha(before), 'after_sha256': sha(target),
+                           'compressed_bytes': len(packed), 'compressed_sha256': sha(packed)})
+        finish_file(fb, ib)
+        finish_file(fa, ia)
+    require(hb.hexdigest() == base_sha and ha.hexdigest() == after_sha, 'source changed between passes')
+    manifest = {'format': FORMAT, 'chunk_bytes': CHUNK, 'image_bytes': size,
+                'baseline_sha256': base_sha, 'after_sha256': after_sha,
+                'changed_chunks': chunks, 'compressed_bytes': total}
+    write_new(output / 'manifest.json', (json.dumps(manifest, indent=2, sort_keys=True)+'\n').encode())
+    # Reopen the actual files written and stream the complete reconstruction.
+    result = verify(base, output, size, base_sha, after_sha, seconds=max(1, deadline-time.monotonic()))
+    write_new(output / 'verification.json', (json.dumps(result, indent=2, sort_keys=True)+'\n').encode())
+    return result
+
+
+def inflate_exact(data, expected):
+    dec = zlib.decompressobj()
+    raw = dec.decompress(data, expected+1)
+    require(len(raw) == expected and dec.eof and not dec.unused_data and not dec.unconsumed_tail,
+            'invalid, truncated, trailing, or overlarge compressed chunk')
+    require(dec.flush() == b'', 'unexpected decompressor output')
+    return raw
+
+
+def verify(base, folder, size, base_sha, after_sha, seconds=1800):
+    validate_parameters(size, base_sha, after_sha)
+    deadline = time.monotonic()+seconds
+    folder = Path(folder)
+    require(folder.is_dir() and not folder.is_symlink(), 'delta folder invalid')
+    manifest_path, mi = regular(folder/'manifest.json')
+    require(mi.st_size <= MAX_MANIFEST, 'manifest too large')
+    raw_manifest = manifest_path.read_bytes()
+    m = json.loads(raw_manifest)
+    require(set(m) == {'format','chunk_bytes','image_bytes','baseline_sha256','after_sha256','changed_chunks','compressed_bytes'}, 'manifest schema mismatch')
+    require(m['format'] == FORMAT and m['chunk_bytes'] == CHUNK and m['image_bytes'] == size and m['baseline_sha256'] == base_sha and m['after_sha256'] == after_sha, 'manifest identity mismatch')
+    records = m['changed_chunks']
+    require(isinstance(records, list) and len(records) <= (size+CHUNK-1)//CHUNK, 'invalid changed chunk count')
+    mapping = {}
+    last, total = -1, 0
+    allowed = {'manifest.json', 'verification.json'}
+    for r in records:
+        require(isinstance(r, dict) and set(r) == {'index','offset','bytes','before_sha256','after_sha256','compressed_bytes','compressed_sha256'}, 'chunk schema mismatch')
+        i = r['index']
+        require(type(i) is int and last < i < (size+CHUNK-1)//CHUNK, 'duplicate, unsorted or outside chunk index')
+        last = i
+        require(type(r['offset']) is int and r['offset'] == i*CHUNK and type(r['bytes']) is int and r['bytes'] == min(CHUNK,size-i*CHUNK), 'chunk bounds mismatch')
+        n = r['compressed_bytes']
+        require(type(n) is int and 0 < n <= CHUNK+1024, 'compressed chunk size invalid')
+        for key in ('before_sha256','after_sha256','compressed_sha256'):
+            pin(r[key])
+        require(r['before_sha256'] != r['after_sha256'], 'unchanged chunk recorded as changed')
+        total += n
+        mapping[i] = r
+        allowed.add(f'{i:08d}.zlib')
+    require(type(m['compressed_bytes']) is int and total == m['compressed_bytes'], 'total compressed bytes mismatch')
+    actual = {p.name for p in folder.iterdir()}
+    require(actual <= allowed and {'manifest.json'} <= actual, 'unexpected delta files')
+    require(all(f'{i:08d}.zlib' in actual for i in mapping), 'missing compressed chunk')
+    fb, ib = checked_open(base, size)
+    hb, ha = hashlib.sha256(), hashlib.sha256()
+    with fb:
+        for index, offset in enumerate(range(0,size,CHUNK)):
+            check_time(deadline)
+            count = min(CHUNK,size-offset)
+            before = fb.read(count)
+            require(len(before) == count, 'short baseline read')
+            hb.update(before)
+            r = mapping.get(index)
+            if r is None:
+                target = before
+            else:
+                require(sha(before) == r['before_sha256'], 'changed chunk baseline hash mismatch')
+                f, info = checked_open(folder/f'{index:08d}.zlib', r['compressed_bytes'])
+                with f:
+                    packed = f.read(CHUNK+1025)
+                    finish_file(f,info)
+                require(sha(packed) == r['compressed_sha256'], 'compressed chunk hash mismatch')
+                target = inflate_exact(packed, count)
+                require(sha(target) == r['after_sha256'], 'after chunk hash mismatch')
+            ha.update(target)
+        finish_file(fb,ib)
+    require(hb.hexdigest() == base_sha, 'full baseline SHA256 mismatch')
+    require(ha.hexdigest() == after_sha, 'full reconstructed SHA256 mismatch')
+    return {'passed': True, 'format': FORMAT, 'image_bytes': size, 'baseline_sha256': base_sha,
+            'after_sha256': after_sha, 'manifest_sha256': sha(raw_manifest),
+            'changed_chunks': len(records), 'compressed_bytes': total,
+            'full_reconstruction_verified_without_image_write': True}
+
+
+def main():
+    p = argparse.ArgumentParser(description=__doc__)
+    p.add_argument('action', choices=('create','verify'))
+    p.add_argument('baseline',type=Path)
+    p.add_argument('other',type=Path,help='after image for create, delta folder for verify')
+    p.add_argument('output',nargs='?',type=Path)
+    p.add_argument('--base-sha256',required=True)
+    p.add_argument('--after-sha256',required=True)
+    p.add_argument('--bytes',dest='size',required=True,type=int)
+    p.add_argument('--max-compressed-bytes',type=int,default=2*1024**3)
+    p.add_argument('--seconds',type=int,default=1800)
+    a = p.parse_args()
+    require(1 <= a.seconds <= 7200,'invalid deadline')
+    if a.action == 'create':
+        require(a.output is not None,'create requires output directory')
+        result = create(a.baseline,a.other,a.output,a.size,a.base_sha256,a.after_sha256,a.max_compressed_bytes,a.seconds)
+    else:
+        require(a.output is None,'verify takes no output path')
+        result = verify(a.baseline,a.other,a.size,a.base_sha256,a.after_sha256,a.seconds)
+    print(json.dumps(result,sort_keys=True))
+
+
+if __name__ == '__main__':
+    main()

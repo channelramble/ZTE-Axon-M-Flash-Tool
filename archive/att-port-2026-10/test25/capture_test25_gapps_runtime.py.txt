@@ -1,0 +1,38 @@
+"""One read-only Android GApps registration/setup snapshot. No settings or account writes."""
+from pathlib import Path
+import hashlib,json,os,time
+from capture_test22_adb import ADB,PORT,Capture,bounded_process,identity_command,verify_identity
+os.umask(0o077)
+r=Path(__file__).resolve().parent;out=r/'test25-gapps-android';out.mkdir(exist_ok=False)
+raw,rc,status=bounded_process([str(ADB),'-P',PORT,'devices'],10,65536);rows=[x.split() for x in raw.decode().splitlines()[1:] if len(x.split())>=2]
+assert status=='ok' and rc==0 and len(rows)==1 and rows[0][1]=='device'
+c=Capture(rows[0][0],time.monotonic()+120)
+body,meta=c.remote(identity_command(),8192,15);assert verify_identity(body,meta)
+(out/'identity.txt').write_bytes(body)
+commands={
+ 'gapps-packages.txt':'''set -eu
+PATH=/system/bin
+for package in com.google.android.gms com.google.android.gsf com.android.vending com.google.android.setupwizard; do
+ printf 'PACKAGE=%s\\n' "$package"
+ pm path "$package"
+ dumpsys package "$package" | grep -E 'versionCode=|versionName=|codePath=|User 0:'
+done
+''',
+ 'startup.txt':'''PATH=/system/bin
+for key in sys.boot_completed ro.bootmode init.svc.recovery init.svc.vendor.usb-hal-1-0 sys.usb.config sys.usb.state; do printf '%s=%s\\n' "$key" "$(getprop "$key")"; done
+printf 'system_server_pid='; pidof system_server
+printf 'device_provisioned='; settings get global device_provisioned
+printf 'user_setup_complete='; settings get secure user_setup_complete
+dumpsys activity activities | grep -E 'mResumedActivity|topResumedActivity|ResumedActivity'
+''',
+ 'crash-buffer.txt':'logcat -b crash -d -v threadtime -t 160',
+}
+state={'read_only':True,'complete':False,'files':{}}
+for name,cmd in commands.items():
+ body,meta=c.remote(cmd,262144,25);(out/name).write_bytes(body)
+ state['files'][name]={**meta,'bytes':len(body),'sha256':hashlib.sha256(body).hexdigest()}
+ (out/'capture.json').write_text(json.dumps(state,indent=2)+'\n')
+ assert meta['status']=='ok',name
+state['files']['identity.txt']={'bytes':(out/'identity.txt').stat().st_size,'sha256':hashlib.sha256((out/'identity.txt').read_bytes()).hexdigest()}
+state['complete']=True;(out/'capture.json').write_text(json.dumps(state,indent=2)+'\n')
+print('GApps package and Android startup capture complete',flush=True)

@@ -7,18 +7,20 @@ Notes for AI coding agents (and people) continuing the effort to run the unoffic
   swapped. Previous-boot pstore records an incoming BCB recovery request;
   diagnostic CLI arguments suppressed the Settings factory-reset arguments.
   Test24 restores native recovery argument handling and cache/data access;
-  it is flashed with full readback verified; its first boot is pending.
+  it is flashed with full readback verified; native recovery boot and the
+  owner-requested factory reset are now verified (section56).
   Menu/PMIC routing remains separate.
-  GApps is requested and staged; a fresh data-reset approval is pending.
+  GApps is requested and staged; the owner has now explicitly approved
+  erasing current apps/settings/files after recovery validation (section56).
   See sections54–55 before any write or reset.
 - **Working recovery controls (October16): Test18 TWRP3.7 and Test19 LOS23.2**
   boot with adb on their own4.4 kernels. Test06 TWRP3.2.3/3.18 is the older
   fallback. See sections38 and42 for verified live captures.
 - The AT&T bootloader now accepts the 4.4-kernel images (fix 1 below).
 - The 4.4 kernel runs on the phone and gets through early boot.
-- **Current installed system: Test23, fully readback-verified (October16).**
-  Test20 Android boot remains intact; Test24 recovery is now installed,
-  pending its first boot (section54). Userdata is preserved. Test22 persists the Gatekeeper diagnostic and GPU-memory-stat
+- **Current installed system: Test23 plus Test25 GApps (October16).**
+  Test20 Android boot remains intact; Test24 recovery is now installed and boots. The owner-approved native
+  factory reset completed before GApps installation (section56). Test22 persists the Gatekeeper diagnostic and GPU-memory-stat
   fallback for the two recorded system_server failures. Android reaches the
   end of its animation in Test22 but blocked on the disabled USB port HAL.
   Test23 restores the published USB port-service init RC. **Owner now confirms
@@ -2467,3 +2469,109 @@ Bound the actual run to180seconds and inspect cleanup on failure. The runtime
 boot and native formatter test remain pending, as does GApps installation.
 Local free space is below1GiB; plan adequate space before capturing a changed
 full GApps system image. Preserve existing baseline images and backups.
+
+## 56. GApps clean installation authorized (October16, in progress)
+
+The owner answered **yes** to: “May I erase the current apps, settings, and
+files after validating recovery, then install GApps?” This is fresh explicit
+authorization for the clean installation. Do not ask again for the same reset.
+First validate Test24 recovery and the RAM-only native formatter test.
+
+ADB was absent at the start of this turn; MacBook USB inventory shows fresh
+QUSB__BULK05c6:9008. The pinned eMMC programmer was loaded successfully once
+(`test25-loader.log`). Do not load it again in this EDL session. Read-only
+`audit_test25_before.py` is capturing fresh main/backup GPT, boot, recovery,
+misc and system to `test25-edl-before` on MacBook. Expected recovery isTest24
+full52d50365..., system remainsTest23 full33db1d4d.... No new writes or resets
+have occurred yet. Recovery entry must be menu-only, without a wipe command,
+until runtime and formatter validation finish.
+
+**Recovery first boot and native formatter validation passed.** After the
+verified menu-only BCB setup and one EDL reset, ADB reports recovery; live native
+recovery/init/fstab hashes matchTest24, USB isadb-only, and BCB is cleared.
+Evidence `test24-recovery-runtime-v1` includes exact native formatter execution
+on a256MiB RAM file, successful kernel mount/write/read, dry-run fsck and full
+scratch cleanup. Native profile uses F2FS features0x499 (encrypt,extra_attr,
+project_quota,quota,verity); availability does not enable data encryption by
+itself. No real userdata format occurred in this capability test.
+
+The first runtime collector had an AND-list/errexit bug: it reported cache
+command absent even though cache was unmounted. Its other identity/BCB and
+formatter evidence remain valid. Preservev1; use corrected v2 collector
+SHAe86b689ae7d22c510d65ec8c8cdfd3a955dae6fd88484e84a70b67dea0cb726f.
+Unmounted cache is normal after native FinishRecovery, which unlinks its command
+then unmounts cache. Do not claim a fresh command-file check from an unmounted
+placeholder. Explicit --show_text BCB precedence prevented a stale cache
+operation from running on this boot.
+
+The owner additionally said “edl on nuke and ensure everything is perfect”;
+live USB was already Androidrecovery18d1:d001, so no additional programmer load
+or reset was sent. Clean reset remains authorized, not a blanket firmware wipe.
+The owner then explicitly declined a userdata backup; none has been created.
+Do not archive or publish personal phone data. Existing ROM/partition baseline
+backups are retained. Root asked the owner to choose Factory reset -> Format
+data/factory reset, then stay in recovery. That physical UI result is pending;
+do not run a competing reset/installer while the owner may be operating it.
+
+Official GApps ZIP is retained and rehashed on MacBook; duplicate local
+download cache was removed to free511MB. All package member hashes and original
+installer remain local. Verification v1 had an AND-list absent-path bug; use
+immutable `prepared/test25-gapps-verification-v2/verify-mounted-system.sh`,
+SHAa7dffda8371a25527131f3520bb9c7a369943e3eab21c7c443921e6bee8a61f5.
+It checks36 Google payload files and27 retained AT&T patches plus addon.d and
+metadata. Root will use the original hash-verified cache-staged installer after
+reset, keeping native recovery idle. Native user-build sideload may reject
+unknown signing keys without offering override. This shell installation uses
+the unchanged official package, avoids a second recovery process, and requires
+explicit file/fullsystem verification before boot. No GApps writes yet.
+
+**Native reset completed and verified.** Owner reports “data wipe complete.”
+Fresh recovery log records successful native F2FS format of userdata and ext4
+format of cache, followed by “Data wipe complete” and BCB clearing. Corrected
+v2 identity collector passed on the still-running Test24 recovery. Cache was
+mounted from geometry-verified p36; its actual filesystem has no pending
+recovery/command. BCB first2048 bytes are zero. Post-reset evidence is verified
+on both Macs in `test25-post-reset`. No userdata backup was made. GApps has
+not yet been installed at this checkpoint; keep recovery idle until verified.
+
+**GApps installed; file verification passed, first Android boot pending.**
+The exact official MindTheGapps16 ARM64 package passed on-phone SHA/size and
+original updater checks. Reviewed wrapper83d8758c... invoked that updater once,
+with no second recovery process or ROM ZIP reinstall. It returned0. The first
+read-only verifier failed because recovery exports TMPDIR=/data/local/tmp,
+which is absent after reset. The unchanged v2 verifier passed after exporting
+TMPDIR=/tmp: all36 Google payload files,27 retained AT&T files, expected
+Provision/Titan absence and generated addon.d content/mode/owner/labels match.
+System was then cleanly unmounted for the complete after readback.
+
+Two evidence-tool limitations were found and preserved: original updater's
+ui_print reopens /proc/self/fd/3 with truncation, so directing fd3 to a regular
+journal loses earlier installer log messages. Exit0 is never sufficient; the
+independent complete file verification above is the installation evidence.
+Do not rerun the installer to recover logs. Initial readback helper used awk,
+which native recovery lacks; it aborted before creating its output directory.
+Immutable capture_test25_after_v2.py replaces those two awk expressions with
+shell read loops, preserving all byte-stream/digest logic;20 focused review
+checks pass. It reads no userdata and makes no device writes. Full post-install
+system/protected readback is in progress at this checkpoint.
+
+**Complete Test25 after readback passed on MacBook.** All6979321856 system
+bytes were read after clean unmount; the host SHA and a separate native full
+partition SHA agree at
+`257967d70da94070625fbc0dfee0880929f0d8a282b9986c72e71e29fd2b4d36`.
+Full boot/recovery/misc and both GPT copies remain exact baseline bytes;
+protected hashes were checked again after the system capture. No userdata was
+read. An offline compressed changed-block representation is being created for
+this Mac, retaining the complete exact Test23 baseline. First Android boot with
+GApps is pending until both-computer verification completes.
+
+**Both-Mac verification is complete; owner restart requested.** The system delta
+contains703 changed1MiB chunks compressed to312204492 bytes. Both computers
+streamed the complete reconstructed6979321856-byte image and verified the exact
+Test25 SHA above; its manifest SHA is
+`8edb6c65a3e00b00b201441c631a3b69b11eb7bb1676939991b7e4a81b41be10`.
+The complete remote readback and local exact baseline+delta are retained;
+returned local-verification receipt is saved in remote test25-after. No userdata
+backup exists. The temporary511MB ZIP was removed from the phone after its
+journal capture; cache was cleanly unmounted and BCB remains zero. Owner was
+asked to select Reboot system now. First Android startup is pending.

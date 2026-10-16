@@ -1,0 +1,66 @@
+{
+  "passed": true,
+  "author_validation": true,
+  "independent_review_pending": true,
+  "phone_operations": false,
+  "guard_mock_cases": [
+    {
+      "case": "missing",
+      "passed": true
+    },
+    {
+      "case": "file",
+      "passed": true
+    },
+    {
+      "case": "dir",
+      "passed": true
+    },
+    {
+      "case": "link",
+      "passed": true
+    },
+    {
+      "case": "dangling",
+      "passed": true
+    },
+    {
+      "cache_mount_count": "0",
+      "passed": true
+    },
+    {
+      "cache_mount_count": "1",
+      "passed": true
+    },
+    {
+      "cache_mount_count": "2",
+      "passed": true
+    }
+  ],
+  "files": {
+    "system_block_delta.py": {
+      "bytes": 10344,
+      "sha256": "a53139c35f54b9b508b22f53fa9d032c1b6fa0dd54ade2395b7a539411387781"
+    },
+    "test_system_block_delta.py": {
+      "bytes": 4767,
+      "sha256": "379ce3502a4c976a2762209fcf68bbdbba003b4330d65bc8e1103b9c921713a7"
+    },
+    "prepared/test25-gapps-verification-v2/manifest.json": {
+      "bytes": 24171,
+      "sha256": "503804d1e44b2cfe317b6ed39133d4cb2523b44fe483b308cf41c17a1ca95a8e"
+    },
+    "prepared/test25-gapps-verification-v2/verify-mounted-system.sh": {
+      "bytes": 16329,
+      "sha256": "a7dffda8371a25527131f3520bb9c7a369943e3eab21c7c443921e6bee8a61f5"
+    },
+    "test24-recovery-capture-v2.sh": {
+      "bytes": 3774,
+      "sha256": "e86b689ae7d22c510d65ec8c8cdfd3a955dae6fd88484e84a70b67dea0cb726f"
+    },
+    "test25-gapps-execution-plan-v2.md": {
+      "bytes": 11102,
+      "sha256": "6e41dcd76eb64aa636bc166f58d0623392caf0c1df0c4fa73754bd9316361cdf"
+    }
+  }
+}

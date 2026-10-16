@@ -1,0 +1,25 @@
+{
+  "passed": true,
+  "author_validation": true,
+  "script_sha256": "83d8758c035c4befb5f8b167fb9bb4cc00ba459034fd742960d77d2d9166a62b",
+  "checks": {
+    "syntax": true,
+    "tmp_kib_ceiling_exact": true,
+    "cache_prepare_kib_ceiling_exact": true,
+    "three_explicit_modes": true,
+    "no_direct_mount_format_reset_commands": true,
+    "exact_original_updater_single_invocation": true,
+    "exact_native_recovery_pid_set_guard": true,
+    "fd3_persistent_log": true,
+    "no_and_list_assertions": true,
+    "verification_still_required": true
+  },
+  "phone_operations": false,
+  "limits": [
+    "Actual native preflight/runtime still required.",
+    "Root separately verifies fresh native reset and both-Mac before-system backups.",
+    "Original updater exit0 requires preparedv2 full payload and after-system backup verification.",
+    "Outer600s bound recommended; native updater timeout300s+10s kill; kernelD-state can outlive signals.",
+    "Exact original updater writes system; wrapper writes cache staging/journal and RAM only; no automatic retry/rollback/cleanup/reset."
+  ]
+}

@@ -1,0 +1,16 @@
+#!/usr/bin/env python3
+"""Local immutable correction of v1 shell errexit AND-list guards."""
+from pathlib import Path
+import hashlib,json,subprocess
+P=Path(__file__).resolve().parent;src=P/'prepared/test25-gapps-verification-v1';out=P/'prepared/test25-gapps-verification-v2'
+sha=lambda b:hashlib.sha256(b).hexdigest()
+b=(src/'verify-mounted-system.sh').read_bytes();assert sha(b)=='175937add36f50b7026c4450565ba78fe2a0144dfc48742787bd5eb50469af23'
+m=(src/'manifest.json').read_bytes();assert sha(m)=='503804d1e44b2cfe317b6ed39133d4cb2523b44fe483b308cf41c17a1ca95a8e'
+s=b.decode();assert s.count(' && ')==4
+s=s.replace(' && ','\n').replace('set -eu\n','set -eu\nset -o pipefail\nPATH=/system/bin\nexport PATH\n')
+assert ' && ' not in s
+assert not out.exists();out.mkdir(mode=0o700)
+(out/'manifest.json').write_bytes(m);(out/'verify-mounted-system.sh').write_text(s)
+subprocess.run(['/bin/sh','-n',str(out/'verify-mounted-system.sh')],check=True)
+r={'passed':True,'source_sha256':sha(b),'output_sha256':sha(s.encode()),'manifest_sha256':sha(m),'changes':'Four AND-list assertions split into independent fail-closed commands; native pipefail and fixed PATH added; expected files/metadata unchanged.','phone_operations':False}
+(out/'correction.json').write_text(json.dumps(r,indent=2)+'\n');print(json.dumps(r))

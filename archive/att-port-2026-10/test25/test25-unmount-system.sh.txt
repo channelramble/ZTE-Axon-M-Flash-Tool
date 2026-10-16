@@ -1,0 +1,25 @@
+#!/system/bin/sh
+set -eu
+set -o pipefail
+PATH=/system/bin
+export PATH
+[ "$(id -u)" = 0 ]
+[ "$(getprop ro.bootmode)" = recovery ]
+[ "$(sha256sum /system/bin/recovery | cut -d ' ' -f1)" = 492b14d1ef9d3f269716465d4d492689e6a41df018f86e4efac139bf34bee220 ]
+count=0
+while read -r dev point typ opts rest; do
+ if [ "$point" = /mnt/system ]; then
+  [ "$(readlink -f "$dev")" = /dev/block/mmcblk0p20 ]
+  [ "$typ" = ext4 ]
+  case ",$opts," in *,ro,*) ;; *) exit 81;; esac
+  count=$((count+1))
+ fi
+done < /proc/mounts
+[ "$count" = 1 ]
+umount /mnt/system
+sync
+while read -r dev point rest; do
+ [ "$point" != /mnt/system ]
+ [ "$(readlink -f "$dev")" != /dev/block/mmcblk0p20 ]
+done < /proc/mounts
+printf 'SYSTEM_UNMOUNTED_FOR_FULL_READBACK\n'

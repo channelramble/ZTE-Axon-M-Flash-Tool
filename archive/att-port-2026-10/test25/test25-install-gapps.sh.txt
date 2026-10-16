@@ -1,0 +1,187 @@
+#!/system/bin/sh
+# Test25 only. Root verifies reset/full before backups separately. No automatic retry.
+# prepare creates only a new cache staging directory. preflight is read-only.
+# install invokes the exact original updater; it does not launch recovery again.
+set -eu
+set -o pipefail
+PATH=/system/bin
+export PATH
+umask 077
+MODE=${1:-preflight}
+[ "$#" -le 1 ]
+case "$MODE" in prepare|preflight|install) ;; *) exit 64 ;; esac
+CACHE=/cache/axon-gapps-test25
+WORK=/tmp/axon-gapps-test25
+ZIP=$CACHE/MindTheGapps-16.0.0-arm64-20260915_222150.zip
+JOURNAL=$CACHE/install-journal
+UPDATER=$WORK/update-binary
+ZIP_SHA=d60f550e4dc96606644fbbf886a9892d1391a607225e861ceaef27bd999bc6a3
+UPDATER_SHA=942cb36151928e44fb31aee50563cf728ad8191d41e9a550be0c27ce8005bdb5
+fail() { printf 'ABORT: %s\n' "$1" >&2; exit 90; }
+absent() {
+    if [ -e "$1" ] || [ -L "$1" ]; then fail "path already exists: $1"; fi
+}
+regular() { [ -f "$1" ]; [ ! -L "$1" ]; }
+hash_is() {
+    hash_result=$(timeout -k 5 120 sha256sum "$1")
+    hash_result=${hash_result%% *}
+    [ "$hash_result" = "$2" ]
+}
+number() { case "$1" in ''|*[!0-9]*) fail nonnumeric_value ;; esac; }
+free_kib() {
+    df_line=$(df -Pk "$1" | tail -n 1)
+    set -- $df_line
+    [ "$#" = 6 ]
+    number "$4"
+    printf '%s\n' "$4"
+}
+[ "$(id -u)" = 0 ]
+[ "$(uname -r)" = 4.4.302-cip112-fujisan ]
+[ "$(getprop ro.bootmode)" = recovery ]
+[ "$(getprop init.svc.recovery)" = running ]
+[ "$(getprop ro.build.product)" = fujisan ]
+[ "$(getprop ro.bionic.arch)" = arm64 ]
+[ "$(getprop ro.build.version.sdk)" = 36 ]
+[ "$(getprop sys.usb.config)" = adb ]
+[ "$(getprop sys.usb.state)" = adb ]
+[ "$(getprop ro.boot.dynamic_partitions)" != true ]
+[ -z "$(getprop ro.boot.slot_suffix)" ]
+hash_is /system/bin/recovery 492b14d1ef9d3f269716465d4d492689e6a41df018f86e4efac139bf34bee220
+hash_is /system/etc/init/hw/init.rc 3f589eb1b50b408e6d20245da99ee789d20407d4398412af9965e90c1e01327e
+hash_is /system/etc/recovery.fstab 697d1f6c7f9e90181aa67cb706cb00a50a69a202a835ccc3aee104cf16c1fafb
+hash_is /system/bin/init 714ecace1ad409d588f497d51c738cf0bdb0a1d23ee3029c5b976db5f0e468eb
+[ "$(readlink -f /sbin/sh)" = "$(readlink -f /system/bin/sh)" ]
+[ "$(readlink -f /etc/recovery.fstab)" = /system/etc/recovery.fstab ]
+recovery_pids=$(pidof recovery | tr ' ' '\n' | sort -n)
+set -- $recovery_pids
+[ "$#" -ge 1 ]
+[ "$#" -le 8 ]
+for recovery_pid in "$@"; do
+    number "$recovery_pid"
+    hash_is "/proc/$recovery_pid/exe" 492b14d1ef9d3f269716465d4d492689e6a41df018f86e4efac139bf34bee220
+    [ "$(tr '\000' '\n' < /proc/$recovery_pid/cmdline)" = /system/bin/recovery ]
+done
+[ -b /dev/block/mmcblk0p20 ]
+[ ! -L /dev/block/mmcblk0p20 ]
+[ -b /dev/block/mmcblk0p36 ]
+[ ! -L /dev/block/mmcblk0p36 ]
+[ "$(cat /sys/class/block/mmcblk0p20/start)" = 1312768 ]
+[ "$(cat /sys/class/block/mmcblk0p20/size)" = 13631488 ]
+[ "$(cat /sys/class/block/mmcblk0p20/dev)" = 179:20 ]
+[ "$(cat /sys/class/block/mmcblk0p36/start)" = 15204376 ]
+[ "$(cat /sys/class/block/mmcblk0p36/size)" = 3356672 ]
+[ "$(cat /sys/class/block/mmcblk0p36/dev)" = 259:4 ]
+[ "$(readlink -f /dev/block/platform/soc/7464900.sdhci/by-name/system)" = /dev/block/mmcblk0p20 ]
+[ "$(readlink -f /dev/block/platform/soc/7464900.sdhci/by-name/cache)" = /dev/block/mmcblk0p36 ]
+for optional in product system_ext; do
+    absent /dev/block/bootdevice/by-name/$optional
+    absent /dev/block/platform/soc/7464900.sdhci/by-name/$optional
+done
+[ -d /cache ]
+[ ! -L /cache ]
+[ -d /tmp ]
+[ ! -L /tmp ]
+cache_count=0
+tmp_count=0
+while read -r dev point typ opts rest; do
+    case "$point" in /data|/system|/mnt/system|/product|/system_ext|/tmp/axon-cache-test19)
+        fail "unexpected mounted point: $point" ;;
+    esac
+    if [ "$point" = /cache ]; then
+        [ "$typ" = ext4 ]
+        [ "$(readlink -f "$dev")" = /dev/block/mmcblk0p36 ]
+        case ",$opts," in *,rw,*) ;; *) fail cache_not_rw ;; esac
+        cache_count=$((cache_count+1))
+    fi
+    if [ "$point" = /tmp ]; then
+        [ "$typ" = tmpfs ]
+        case ",$opts," in *,rw,*) ;; *) fail tmp_not_rw ;; esac
+        tmp_count=$((tmp_count+1))
+    fi
+    case "$dev" in /dev/block/*)
+        resolved=$(readlink -f "$dev")
+        [ "$resolved" != /dev/block/mmcblk0p20 ]
+        if [ "$resolved" = /dev/block/mmcblk0p36 ]; then [ "$point" = /cache ]; fi
+        ;;
+    esac
+done < /proc/mounts
+[ "$cache_count" = 1 ]
+[ "$tmp_count" = 1 ]
+absent /cache/recovery/command
+bcb=$(dd if=/dev/block/mmcblk0p38 bs=2048 count=1 2>/dev/null | sha256sum)
+bcb=${bcb%% *}
+[ "$bcb" = e5a00aa9991ac8a5ee3109844d84a55583bd20572ad3ffcd42792f3c36b183ad ]
+# These are all top-level destinations/extraction-owned paths used by original ZIP.
+for path in /tmp/system /tmp/bin /tmp/toybox /tmp/build.prop /tmp/META-INF "$WORK"; do
+    absent "$path"
+done
+[ "$(free_kib /tmp)" -ge 1373927 ]
+mem_kib=
+while read -r key value unit rest; do
+    if [ "$key" = MemAvailable: ]; then
+        [ "$unit" = kB ]
+        number "$value"
+        mem_kib=$value
+    fi
+done < /proc/meminfo
+number "$mem_kib"
+[ "$mem_kib" -ge 1373927 ]
+boot_hash=$(sha256sum /proc/sys/kernel/random/boot_id)
+boot_hash=${boot_hash%% *}
+marker="axon-gapps-test25:$boot_hash:$recovery_pids"
+if [ "$MODE" = prepare ]; then
+    absent "$CACHE"
+    [ "$(free_kib /cache)" -ge 515701 ]
+    mkdir -m 0700 "$CACHE"
+    set -C
+    printf '%s\n' "$marker" > "$CACHE/stage-ready"
+    sync
+    printf '%s\n' TEST25_CACHE_STAGE_PREPARED
+    exit 0
+fi
+[ -d "$CACHE" ]
+[ ! -L "$CACHE" ]
+[ "$(stat -c '%a:%u:%g' "$CACHE")" = 700:0:0 ]
+regular "$CACHE/stage-ready"
+[ "$(cat "$CACHE/stage-ready")" = "$marker" ]
+absent "$JOURNAL"
+[ "$(free_kib /cache)" -ge 16384 ]
+regular "$ZIP"
+[ "$(stat -c '%s' "$ZIP")" = 511299883 ]
+hash_is "$ZIP" "$ZIP_SHA"
+# Check exact original updater from the verified ZIP without creating a file.
+updater_hash=$(timeout -k 5 15 unzip -p "$ZIP" META-INF/com/google/android/update-binary | sha256sum)
+updater_hash=${updater_hash%% *}
+[ "$updater_hash" = "$UPDATER_SHA" ]
+updater_bytes=$(timeout -k 5 15 unzip -p "$ZIP" META-INF/com/google/android/update-binary | wc -c)
+[ "$updater_bytes" -eq 9093 ]
+if [ "$MODE" = preflight ]; then
+    printf '%s\n' TEST25_GAPPS_PREFLIGHT_PASSED
+    exit 0
+fi
+# Persistent exclusive journal is the no-retry gate, even after a reboot.
+mkdir -m 0700 "$JOURNAL"
+set -C
+printf 'phase=started\nzip_sha256=%s\nupdater_sha256=%s\n' "$ZIP_SHA" "$UPDATER_SHA" > "$JOURNAL/started"
+sync
+# Never auto-remove or retry this journal/workdir after any failure.
+mkdir -m 0700 "$WORK"
+timeout -k 5 15 unzip -p "$ZIP" META-INF/com/google/android/update-binary > "$UPDATER"
+regular "$UPDATER"
+[ "$(stat -c '%s' "$UPDATER")" = 9093 ]
+hash_is "$UPDATER" "$UPDATER_SHA"
+[ "$(pidof recovery | tr ' ' '\n' | sort -n)" = "$recovery_pids" ]
+# Subprocess umask matches the original updater's normal file preparation.
+# Do not set RLIMIT_FSIZE: it would also limit APK output files, not just logs.
+if (umask 022; timeout -k 10 300 /system/bin/sh "$UPDATER" 3 3 "$ZIP") > "$JOURNAL/updater.log" 2>&1 3>&1; then
+    updater_rc=0
+else
+    updater_rc=$?
+fi
+printf 'phase=updater_returned\nexit_status=%s\n' "$updater_rc" > "$JOURNAL/result"
+sync
+printf 'updater_exit_status=%s\n' "$updater_rc"
+tail -c 65536 "$JOURNAL/updater.log"
+[ "$updater_rc" = 0 ]
+printf '%s\n' TEST25_UPDATER_RETURNED_ZERO_VERIFICATION_STILL_REQUIRED
+# No success/verified claim, reset, restart, unmount or cleanup is performed here.

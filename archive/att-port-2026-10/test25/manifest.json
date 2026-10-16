@@ -1,0 +1,214 @@
+{
+  "schema": 1,
+  "description": "Sanitized historical Test24 native recovery validation and Test25 GApps installer/verifier/readback sources. Not executable installation approval. No raw captures, phone data, images, keys, programmers or changed-block payloads.",
+  "entries": [
+    {
+      "source": "run_test24_recovery_bcb.py",
+      "public_path": "run_test24_recovery_bcb.py.txt",
+      "source_sha256": "cf697f4a351a023d023e105fbec46e2be945e353be447ecfab74e82c6bbe5988",
+      "published_sha256": "cf697f4a351a023d023e105fbec46e2be945e353be447ecfab74e82c6bbe5988",
+      "published_bytes": 14387,
+      "transformations": []
+    },
+    {
+      "source": "reset_test24_recovery_bcb.py",
+      "public_path": "reset_test24_recovery_bcb.py.txt",
+      "source_sha256": "069ce6f2ce5139fd77318ee33d5809e8b1d9ccbc67d14bce10f72a3e22d90b6f",
+      "published_sha256": "069ce6f2ce5139fd77318ee33d5809e8b1d9ccbc67d14bce10f72a3e22d90b6f",
+      "published_bytes": 4177,
+      "transformations": []
+    },
+    {
+      "source": "test24-recovery-bcb-independent-review.json",
+      "public_path": "test24-recovery-bcb-independent-review.json",
+      "source_sha256": "918beb4645bea64585a8bfe425e3f423baa1705c36426d75fc74b851d753bd03",
+      "published_sha256": "918beb4645bea64585a8bfe425e3f423baa1705c36426d75fc74b851d753bd03",
+      "published_bytes": 3143,
+      "transformations": []
+    },
+    {
+      "source": "test24-f2fs-native-ram-check.sh",
+      "public_path": "test24-f2fs-native-ram-check.sh.txt",
+      "source_sha256": "5392afda9f3fb17507017ac1e52707253e1aca8a5c9354be86e1dc665e04e26d",
+      "published_sha256": "5392afda9f3fb17507017ac1e52707253e1aca8a5c9354be86e1dc665e04e26d",
+      "published_bytes": 4411,
+      "transformations": []
+    },
+    {
+      "source": "test24-recovery-capture-v2.sh",
+      "public_path": "test24-recovery-capture-v2.sh.txt",
+      "source_sha256": "e86b689ae7d22c510d65ec8c8cdfd3a955dae6fd88484e84a70b67dea0cb726f",
+      "published_sha256": "e86b689ae7d22c510d65ec8c8cdfd3a955dae6fd88484e84a70b67dea0cb726f",
+      "published_bytes": 3774,
+      "transformations": []
+    },
+    {
+      "source": "audit_test25_before.py",
+      "public_path": "audit_test25_before.py.txt",
+      "source_sha256": "4fdcd059519dd9f81a4832741fe5094e7a9333a2d35cd189e1ce017115abd4e4",
+      "published_sha256": "4fdcd059519dd9f81a4832741fe5094e7a9333a2d35cd189e1ce017115abd4e4",
+      "published_bytes": 1563,
+      "transformations": []
+    },
+    {
+      "source": "prepare_test25_gapps_verification_v2.py",
+      "public_path": "prepare_test25_gapps_verification_v2.py.txt",
+      "source_sha256": "ed4ad2b4d4656064942bc146ae03912c7693c7f8a33ad9713bacd6f8213d39cf",
+      "published_sha256": "ed4ad2b4d4656064942bc146ae03912c7693c7f8a33ad9713bacd6f8213d39cf",
+      "published_bytes": 1308,
+      "transformations": []
+    },
+    {
+      "source": "prepared/test25-gapps-verification-v2/verify-mounted-system.sh",
+      "public_path": "prepared/test25-gapps-verification-v2/verify-mounted-system.sh.txt",
+      "source_sha256": "a7dffda8371a25527131f3520bb9c7a369943e3eab21c7c443921e6bee8a61f5",
+      "published_sha256": "a7dffda8371a25527131f3520bb9c7a369943e3eab21c7c443921e6bee8a61f5",
+      "published_bytes": 16329,
+      "transformations": []
+    },
+    {
+      "source": "prepared/test25-gapps-verification-v2/manifest.json",
+      "public_path": "prepared/test25-gapps-verification-v2/manifest.json",
+      "source_sha256": "503804d1e44b2cfe317b6ed39133d4cb2523b44fe483b308cf41c17a1ca95a8e",
+      "published_sha256": "503804d1e44b2cfe317b6ed39133d4cb2523b44fe483b308cf41c17a1ca95a8e",
+      "published_bytes": 24171,
+      "transformations": []
+    },
+    {
+      "source": "prepared/test25-gapps-verification-v2/correction.json",
+      "public_path": "prepared/test25-gapps-verification-v2/correction.json",
+      "source_sha256": "8b74bf2cbf12fb0be776166f9c6671b26cb7fa4d55875080f7b7e155b4ad6ee8",
+      "published_sha256": "8b74bf2cbf12fb0be776166f9c6671b26cb7fa4d55875080f7b7e155b4ad6ee8",
+      "published_bytes": 472,
+      "transformations": []
+    },
+    {
+      "source": "test25-gapps-preparation-independent-review.json",
+      "public_path": "test25-gapps-preparation-independent-review.json",
+      "source_sha256": "1780973aad5c3c3521dc79b12e81ea17cfbad689a6802dfeea3f4edece49ba37",
+      "published_sha256": "1780973aad5c3c3521dc79b12e81ea17cfbad689a6802dfeea3f4edece49ba37",
+      "published_bytes": 17232,
+      "transformations": []
+    },
+    {
+      "source": "test25-gapps-preparation-author-validation-v2.json",
+      "public_path": "test25-gapps-preparation-author-validation-v2.json",
+      "source_sha256": "6134d9cd3f9a55d1298cb0686064e574b183f9ef87cd4f5add1664db67ff6dd0",
+      "published_sha256": "6134d9cd3f9a55d1298cb0686064e574b183f9ef87cd4f5add1664db67ff6dd0",
+      "published_bytes": 1598,
+      "transformations": []
+    },
+    {
+      "source": "test25-install-gapps.sh",
+      "public_path": "test25-install-gapps.sh.txt",
+      "source_sha256": "83d8758c035c4befb5f8b167fb9bb4cc00ba459034fd742960d77d2d9166a62b",
+      "published_sha256": "83d8758c035c4befb5f8b167fb9bb4cc00ba459034fd742960d77d2d9166a62b",
+      "published_bytes": 7376,
+      "transformations": []
+    },
+    {
+      "source": "test25-gapps-installer-independent-review.json",
+      "public_path": "test25-gapps-installer-independent-review.json",
+      "source_sha256": "8f9a1a36f48476d3c4dce551162713ded74948fa8290b48e61c28e4b8f864f38",
+      "published_sha256": "8f9a1a36f48476d3c4dce551162713ded74948fa8290b48e61c28e4b8f864f38",
+      "published_bytes": 2804,
+      "transformations": []
+    },
+    {
+      "source": "test25-gapps-installer-author-validation.json",
+      "public_path": "test25-gapps-installer-author-validation.json",
+      "source_sha256": "4fdb49b6e6941355ec3b7cb51e3786fd033657fc360b84efdc113dbec961f857",
+      "published_sha256": "4fdb49b6e6941355ec3b7cb51e3786fd033657fc360b84efdc113dbec961f857",
+      "published_bytes": 1089,
+      "transformations": []
+    },
+    {
+      "source": "run_test25_shell.py",
+      "public_path": "run_test25_shell.py.txt",
+      "source_sha256": "6929113b9ef659a0021dc09671908e6cb8e1540e5f82ad35f48e8d0308f4313e",
+      "published_sha256": "6929113b9ef659a0021dc09671908e6cb8e1540e5f82ad35f48e8d0308f4313e",
+      "published_bytes": 1540,
+      "transformations": []
+    },
+    {
+      "source": "test25-mount-system-ro.sh",
+      "public_path": "test25-mount-system-ro.sh.txt",
+      "source_sha256": "9c44ea0e01dbd30629d9286dc1d671a7b7dbcfbba636e927824e6dae9f6ec50f",
+      "published_sha256": "9c44ea0e01dbd30629d9286dc1d671a7b7dbcfbba636e927824e6dae9f6ec50f",
+      "published_bytes": 709,
+      "transformations": []
+    },
+    {
+      "source": "test25-unmount-system.sh",
+      "public_path": "test25-unmount-system.sh.txt",
+      "source_sha256": "56fec134522c328fd8e85738e03d84ac24e0b6f342754cc7ef08fa1cc4526b59",
+      "published_sha256": "56fec134522c328fd8e85738e03d84ac24e0b6f342754cc7ef08fa1cc4526b59",
+      "published_bytes": 731,
+      "transformations": []
+    },
+    {
+      "source": "capture_test25_after.py",
+      "public_path": "capture_test25_after.py.txt",
+      "source_sha256": "fe6c50c935a9b714297d3e9c778b6908a7614ce4a0e7175370763d06de9acfca",
+      "published_sha256": "fe6c50c935a9b714297d3e9c778b6908a7614ce4a0e7175370763d06de9acfca",
+      "published_bytes": 14759,
+      "transformations": []
+    },
+    {
+      "source": "capture_test25_after_v2.py",
+      "public_path": "capture_test25_after_v2.py.txt",
+      "source_sha256": "870d4aa047dc2a92feb9ecaa3e1768dda8f5db97e07d933a2b0dc5fc88844d00",
+      "published_sha256": "870d4aa047dc2a92feb9ecaa3e1768dda8f5db97e07d933a2b0dc5fc88844d00",
+      "published_bytes": 14922,
+      "transformations": []
+    },
+    {
+      "source": "capture_test25_gapps_runtime.py",
+      "public_path": "capture_test25_gapps_runtime.py.txt",
+      "source_sha256": "2fc3011c864e049dc966bff9b690675edd7dd07dbf8fb8fc62818ac3041b3296",
+      "published_sha256": "2fc3011c864e049dc966bff9b690675edd7dd07dbf8fb8fc62818ac3041b3296",
+      "published_bytes": 2265,
+      "transformations": []
+    },
+    {
+      "source": "test25-after-capture-author-validation.json",
+      "public_path": "test25-after-capture-author-validation.json",
+      "source_sha256": "d66503d6de9c2acaed5a1fc7438c92d11ecd667a477d9c4ff756062b5b602468",
+      "published_sha256": "d66503d6de9c2acaed5a1fc7438c92d11ecd667a477d9c4ff756062b5b602468",
+      "published_bytes": 1254,
+      "transformations": []
+    },
+    {
+      "source": "test25-after-capture-independent-review.json",
+      "public_path": "test25-after-capture-independent-review.json",
+      "source_sha256": "3698f7c63bfa48c53e235858eb0c7d631b6c7306438a915a7b1da61c6f9c23d9",
+      "published_sha256": "3698f7c63bfa48c53e235858eb0c7d631b6c7306438a915a7b1da61c6f9c23d9",
+      "published_bytes": 3623,
+      "transformations": []
+    },
+    {
+      "source": "test25-after-capture-v2-independent-review.json",
+      "public_path": "test25-after-capture-v2-independent-review.json",
+      "source_sha256": "855f516c576311b1549668cb375224c7a7f0223cc0358e7df2c90936194df693",
+      "published_sha256": "855f516c576311b1549668cb375224c7a7f0223cc0358e7df2c90936194df693",
+      "published_bytes": 1698,
+      "transformations": []
+    },
+    {
+      "source": "system_block_delta.py",
+      "public_path": "system_block_delta.py.txt",
+      "source_sha256": "a53139c35f54b9b508b22f53fa9d032c1b6fa0dd54ade2395b7a539411387781",
+      "published_sha256": "a53139c35f54b9b508b22f53fa9d032c1b6fa0dd54ade2395b7a539411387781",
+      "published_bytes": 10344,
+      "transformations": []
+    },
+    {
+      "source": "test_system_block_delta.py",
+      "public_path": "test_system_block_delta.py.txt",
+      "source_sha256": "379ce3502a4c976a2762209fcf68bbdbba003b4330d65bc8e1103b9c921713a7",
+      "published_sha256": "379ce3502a4c976a2762209fcf68bbdbba003b4330d65bc8e1103b9c921713a7",
+      "published_bytes": 4767,
+      "transformations": []
+    }
+  ]
+}

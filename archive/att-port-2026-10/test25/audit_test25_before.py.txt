@@ -1,0 +1,23 @@
+from pathlib import Path
+import json, signal, os
+from firehose_read import Reader
+from firehose_boot_test import save_state
+os.umask(0o077)
+root=Path(__file__).resolve().parent
+out=root/'test25-edl-before';out.mkdir(exist_ok=False)
+rows=[('gpt',0,14,'7f1e4fd44e69e004189f0256ce6d35addfb1e3dbfe1cd55bfd2047b580b1e891'),('gpt-backup',122142687,33,'b76a0353e9b841984f434f8f7d875f76b18ba1d4c01db15958d13e3525b03990'),('boot',1050624,131072,'4434306a5c58d4de5ee018a59a04ae3f551d7073efae1fe7a07bd07e468a17d6'),('recovery',1181696,131072,'52d50365ec73d60af80e235b776069fe5f2b85338a68126c2c0ea00f103170d9'),('misc',18626584,2048,'07e3021342d8a12056e9faf36ade8832e1d24e8daaa6930516da3ed88412183e'),('system',1312768,13631488,'33db1d4d4e5e49f5dc1c06cbd6a0e39b07fd9b6d886941e33f165b7876fccc5a')]
+assert os.statvfs(root).f_bavail*os.statvfs(root).f_frsize>8000000000
+state={'complete':False,'writes_sent':False,'files':{}}
+def deadline(*args):raise TimeoutError('Read-only audit deadline; no reset')
+signal.signal(signal.SIGALRM,deadline);signal.alarm(1800)
+with (out/'firehose.xml.log').open('xb') as log:
+ c=Reader(log)
+ try:
+  c.configure()
+  for name,start,count,expected in rows:
+   row=c.read(start,count,out/(name+'.bin'));state['files'][name]=row;save_state(out/'audit.json',state)
+   assert row['bytes']==count*512 and row['sha256']==expected and row['final_ack']
+   if name=='misc':assert not any((out/'misc.bin').read_bytes()[:2048])
+   print(name,'verified',row['sha256'],flush=True)
+  state['complete']=True;save_state(out/'audit.json',state)
+ finally:c.close()

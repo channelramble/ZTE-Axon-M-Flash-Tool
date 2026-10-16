@@ -1,0 +1,53 @@
+{
+  "passed": true,
+  "script_sha256": "83d8758c035c4befb5f8b167fb9bb4cc00ba459034fd742960d77d2d9166a62b",
+  "independent_review": true,
+  "phone_operations": false,
+  "checks_passed": 31,
+  "checks": [
+    "frozen final source SHA",
+    "shell syntax",
+    "native Test24 runtime pin /system/bin/recovery",
+    "native Test24 runtime pin /system/etc/init/hw/init.rc",
+    "native Test24 runtime pin /system/etc/recovery.fstab",
+    "native Test24 runtime pin /system/bin/init",
+    "BCB first2048zero exact",
+    "RAM bound covers entire ZIP expansion plus256MiB",
+    "cache prepare bound covers package plus16MiB",
+    "absent guard missing",
+    "absent guard file",
+    "absent guard dir",
+    "absent guard dangling",
+    "absent guard link",
+    "regular guard file",
+    "regular guard missing",
+    "regular guard dir",
+    "regular guard dangling",
+    "regular guard link",
+    "numeric pid guard '483'",
+    "numeric pid guard ''",
+    "numeric pid guard '49x'",
+    "numeric pid guard '4;true'",
+    "MODE survives recovery argument replacement",
+    "fd3/stdout/stderr log and child rc 0",
+    "fd3/stdout/stderr log and child rc 7",
+    "exclusive journal first creation",
+    "journal refuses repeat and preserves first evidence",
+    "pipefail rejects extraction/hash producer failure",
+    "persistent journal precedes original updater invocation",
+    "exact original updater args and provisional result only"
+  ],
+  "source_findings": [
+    "MODE survives positional parameter replacement; shell function globals do not replace MODE or pinned paths/hashes.",
+    "One-to-eight sorted numeric recovery PIDs each require exact native executable hash and argv; boot/PID-bound marker and final PID-set equality prevent cross-session staging reuse.",
+    "Fixed p20/p36 geometry, aliases, native Test24 hashes, recovery-only properties, cacheRW/tmpfs guards, unmounted system/data, empty BCB/cache command precede all staging/install writes.",
+    "No direct format, mount, reboot or second recovery process. The invoked exact original updater owns authorized system changes.",
+    "Exclusive persistent journal and no-clobber creation make failures non-retryable automatically; timeout300 kill10 bounds original updater; fd3 points to same persistent log as stdout/stderr."
+  ],
+  "limits": [
+    "No device execution; native runtime/tool availability and actual RAM/disk space remain root checks.",
+    "Root separately verifies native wipe and both-Mac full before backup receipts; this script intentionally does not encode those external gates.",
+    "Updater zero exit remains provisional; use reviewed v2 verifier and full after capture/delta verification before Android boot.",
+    "Timeout or failure leaves journal/work state for inspection; no automatic cleanup or retry."
+  ]
+}

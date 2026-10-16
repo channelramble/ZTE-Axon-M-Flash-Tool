@@ -1,0 +1,170 @@
+#!/system/bin/sh
+# Read-only. Root must first mount the verified p20 at /mnt/system ext4 read-only.
+set -eu
+set -o pipefail
+PATH=/system/bin
+export PATH
+[ "$#" -eq 0 ]
+[ "$(id -u)" = 0 ]
+[ "$(getprop ro.bootmode)" = recovery ]
+[ "$(sha256sum /system/bin/recovery | cut -d ' ' -f 1)" = 492b14d1ef9d3f269716465d4d492689e6a41df018f86e4efac139bf34bee220 ]
+[ "$(cat /sys/class/block/mmcblk0p20/start)" = 1312768 ]
+[ "$(cat /sys/class/block/mmcblk0p20/size)" = 13631488 ]
+[ "$(cat /sys/class/block/mmcblk0p20/dev)" = 179:20 ]
+[ -d /mnt/system ]
+[ ! -L /mnt/system ]
+count=0
+while read -r dev point typ opts rest; do
+ if [ "$point" = /mnt/system ]; then
+  [ "$(readlink -f "$dev")" = /dev/block/mmcblk0p20 ]
+  [ "$typ" = ext4 ]
+  case ",$opts," in *,ro,*) ;; *) exit 81;; esac
+  count=$((count+1))
+ fi
+done < /proc/mounts
+[ "$count" = 1 ]
+check() {
+ file=/mnt/system$1
+ [ -f "$file" ]
+[ ! -L "$file" ]
+ [ "$(stat -c '%a:%u:%g:%s' "$file")" = "$2" ]
+ case "$(ls -Zd "$file")" in "$3 "*) ;; *) exit 82;; esac
+}
+check '/system/bin/gatekeeperd' '755:0:2000:44800' 'u:object_r:gatekeeperd_exec:s0'
+check '/system/bin/init' '755:0:2000:2716600' 'u:object_r:init_exec:s0'
+check '/system/build.prop' '600:0:0:9997' 'u:object_r:system_file:s0'
+check '/system/etc/axon-diag-test20-collect.sh' '644:0:0:6985' 'u:object_r:system_file:s0'
+check '/system/etc/axon-diag-test20-persist.sh' '644:0:0:3445' 'u:object_r:system_file:s0'
+check '/system/etc/init/axon-diag-test20.rc' '644:0:0:438' 'u:object_r:system_file:s0'
+check '/system/etc/init/fujisan.rc' '644:0:0:8053' 'u:object_r:system_file:s0'
+check '/system/etc/init/hw/init.rc' '644:0:0:59871' 'u:object_r:system_file:s0'
+check '/system/etc/init/hw/init.usb.configfs.rc' '644:0:0:7690' 'u:object_r:system_file:s0'
+check '/system/etc/init/hw/init.usb.rc' '644:0:0:5932' 'u:object_r:system_file:s0'
+check '/system/etc/init/usbd.rc' '644:0:0:103' 'u:object_r:system_file:s0'
+check '/system/lib64/libmeminfo.so' '644:0:0:149304' 'u:object_r:system_lib_file:s0'
+check '/system/system_ext/etc/build.prop' '600:0:0:1037' 'u:object_r:system_file:s0'
+check '/system/vendor/etc/fstab.qcom' '644:0:0:2742' 'u:object_r:vendor_configs_file:s0'
+check '/system/vendor/etc/init/android.hardware.gatekeeper@1.0-service.rc' '644:0:0:199' 'u:object_r:vendor_configs_file:s0'
+check '/system/vendor/etc/init/android.hardware.usb@1.0-service.rc' '644:0:0:175' 'u:object_r:vendor_configs_file:s0'
+check '/system/vendor/etc/init/hw/init.msm.usb.configfs.rc' '644:0:0:44909' 'u:object_r:vendor_configs_file:s0'
+check '/system/vendor/etc/init/hw/init.qcom.rc' '644:0:0:33455' 'u:object_r:vendor_configs_file:s0'
+check '/system/vendor/etc/init/hw/init.qcom.usb.rc' '644:0:0:94581' 'u:object_r:vendor_configs_file:s0'
+check '/system/vendor/etc/init/hw/init.target.rc' '644:0:0:11968' 'u:object_r:vendor_configs_file:s0'
+check '/system/vendor/etc/init/hw/init.vendor.usb.rc' '644:0:0:39037' 'u:object_r:vendor_configs_file:s0'
+check '/system/vendor/etc/init/zz-fujisan-charger.rc' '644:0:0:377' 'u:object_r:vendor_configs_file:s0'
+check '/system/vendor/firmware/a530_zap.b00' '644:0:0:148' 'u:object_r:vendor_file:s0'
+check '/system/vendor/firmware/a530_zap.b01' '644:0:0:6536' 'u:object_r:vendor_file:s0'
+check '/system/vendor/firmware/a530_zap.b02' '644:0:0:4900' 'u:object_r:vendor_file:s0'
+check '/system/vendor/firmware/a530_zap.elf' '644:0:0:17188' 'u:object_r:vendor_file:s0'
+check '/system/vendor/firmware/a530_zap.mdt' '644:0:0:6684' 'u:object_r:vendor_file:s0'
+check '/system/product/app/GoogleCalendarSyncAdapter/GoogleCalendarSyncAdapter.apk' '644:0:0:3117863' 'u:object_r:system_file:s0'
+check '/system/product/app/GoogleContactsSyncAdapter/GoogleContactsSyncAdapter.apk' '644:0:0:1505961' 'u:object_r:system_file:s0'
+check '/system/product/app/MarkupGoogle_v2/MarkupGoogle_v2.apk' '644:0:0:6852628' 'u:object_r:system_file:s0'
+check '/system/product/app/PrebuiltExchange3Google/PrebuiltExchange3Google.apk' '644:0:0:491242' 'u:object_r:system_file:s0'
+check '/system/product/app/SpeechServicesByGoogle/SpeechServicesByGoogle.apk' '644:0:0:69844065' 'u:object_r:system_file:s0'
+check '/system/product/app/talkback/talkback.apk' '644:0:0:36467696' 'u:object_r:system_file:s0'
+check '/system/product/etc/default-permissions/default-permissions-google.xml' '644:0:0:3521' 'u:object_r:system_file:s0'
+check '/system/product/etc/default-permissions/default-permissions-mtg.xml' '644:0:0:1453' 'u:object_r:system_file:s0'
+check '/system/product/etc/init/gapps.rc' '644:0:0:95' 'u:object_r:system_file:s0'
+check '/system/product/etc/permissions/com.google.android.dialer.support.xml' '644:0:0:610' 'u:object_r:system_file:s0'
+check '/system/product/etc/permissions/privapp-permissions-google-product.xml' '644:0:0:29364' 'u:object_r:system_file:s0'
+check '/system/product/etc/permissions/privapp-permissions-mtg.xml' '644:0:0:362' 'u:object_r:system_file:s0'
+check '/system/product/etc/security/fsverity/gms_fsverity_cert.der' '644:0:0:1484' 'u:object_r:system_file:s0'
+check '/system/product/etc/sysconfig/d2d_cable_migration_feature.xml' '644:0:0:136' 'u:object_r:system_file:s0'
+check '/system/product/etc/sysconfig/google-hiddenapi-package-allowlist.xml' '644:0:0:4259' 'u:object_r:system_file:s0'
+check '/system/product/etc/sysconfig/google.xml' '644:0:0:6127' 'u:object_r:system_file:s0'
+check '/system/product/etc/sysconfig/sysconfig-mtg.xml' '644:0:0:320' 'u:object_r:system_file:s0'
+check '/system/product/etc/sysconfig/wellbeing.xml' '644:0:0:118' 'u:object_r:system_file:s0'
+check '/system/product/framework/com.google.android.dialer.support.jar' '644:0:0:946' 'u:object_r:system_file:s0'
+check '/system/product/lib64/libjni_latinimegoogle.so' '644:0:0:1112352' 'u:object_r:system_file:s0'
+check '/system/product/overlay/GmsOverlay.apk' '644:0:0:12680' 'u:object_r:system_file:s0'
+check '/system/product/overlay/GmsSettingsOverlay.apk' '644:0:0:8584' 'u:object_r:system_file:s0'
+check '/system/product/overlay/GmsSettingsProviderOverlay.apk' '644:0:0:8584' 'u:object_r:system_file:s0'
+check '/system/product/overlay/GmsSetupWizardOverlay.apk' '644:0:0:8584' 'u:object_r:system_file:s0'
+check '/system/product/priv-app/AndroidAutoStub/AndroidAutoStub.apk' '644:0:0:3787604' 'u:object_r:system_file:s0'
+check '/system/product/priv-app/FamilyLinkParentalControls/FamilyLinkParentalControls.apk' '644:0:0:41429' 'u:object_r:system_file:s0'
+check '/system/product/priv-app/GmsCore/GmsCore.apk' '644:0:0:175350630' 'u:object_r:system_file:s0'
+check '/system/product/priv-app/GooglePartnerSetup/GooglePartnerSetup.apk' '644:0:0:1571073' 'u:object_r:system_file:s0'
+check '/system/product/priv-app/GoogleRestore/GoogleRestore.apk' '644:0:0:16652568' 'u:object_r:system_file:s0'
+check '/system/product/priv-app/Phonesky/Phonesky.apk' '644:0:0:88697354' 'u:object_r:system_file:s0'
+check '/system/product/priv-app/Velvet/Velvet.apk' '644:0:0:254491804' 'u:object_r:system_file:s0'
+check '/system/product/priv-app/Wellbeing/Wellbeing.apk' '644:0:0:23127349' 'u:object_r:system_file:s0'
+check '/system/system_ext/etc/permissions/privapp-permissions-google-system-ext.xml' '644:0:0:4569' 'u:object_r:system_file:s0'
+check '/system/system_ext/priv-app/GoogleFeedback/GoogleFeedback.apk' '644:0:0:528152' 'u:object_r:system_file:s0'
+check '/system/system_ext/priv-app/GoogleServicesFramework/GoogleServicesFramework.apk' '644:0:0:4387851' 'u:object_r:system_file:s0'
+check '/system/system_ext/priv-app/SetupWizard/SetupWizard.apk' '644:0:0:14297378' 'u:object_r:system_file:s0'
+sha256sum -c <<'AXON_EXPECTED_SHA256'
+6ad0a440825550c3f5ec504bf438cabcbbb987cf581f088cb939d52164deb5f6  /mnt/system/system/bin/gatekeeperd
+31bfd4ad1cdd17986110499be2a7e60748dbc5f8c3df4a0c692c3f3a2bfc4a18  /mnt/system/system/bin/init
+669e957ef4423ce78ba77f961d5f2aee8dce1fdeb658e89763bb3ad773b9fb98  /mnt/system/system/build.prop
+42b5c0e9d24dba1195e9c556422c0d5d8df47c339bb82dcfd55b62335dc17bfe  /mnt/system/system/etc/axon-diag-test20-collect.sh
+34082cdeba9965d2b89b9062c84debbd70d776698513bf0b075a976e3062f374  /mnt/system/system/etc/axon-diag-test20-persist.sh
+a50ae2ff6de6fe962a4c7688c271da3921067c8169e73d7e9e5da34a2d0a4310  /mnt/system/system/etc/init/axon-diag-test20.rc
+cc55694b6567f665c6259fa1aa9219acfb339f7f5398937b95a526a1148ec5d5  /mnt/system/system/etc/init/fujisan.rc
+54b68ef6f916ea888148665a0fd18b57ad9106f28f41e1686baea0eaf3876a69  /mnt/system/system/etc/init/hw/init.rc
+981a8ae78bf913774bf290f06d0366cd95f7ea4a4fb330e6b00f11b6979d19d2  /mnt/system/system/etc/init/hw/init.usb.configfs.rc
+c0a703ea619fc1471055d9883911c00d67baf923b92df2c243d37c10f06391e3  /mnt/system/system/etc/init/hw/init.usb.rc
+22db962f0eec109d9fcf6f875680de923cf7c23757357fc582b8ca78415cd6af  /mnt/system/system/etc/init/usbd.rc
+040e0c8f97434b8d101914901f55b346c4b27eee8dc82b43f2a766258245a028  /mnt/system/system/lib64/libmeminfo.so
+1e7e7903d60f2587dd8d81741af8c5190c91e4b172a63e5cd465ad49fae4affe  /mnt/system/system/system_ext/etc/build.prop
+054394e13e07abc4b32f700621320232447f829d67ea1846c7bfad9440086ec5  /mnt/system/system/vendor/etc/fstab.qcom
+172a6f91ce32c0b8cb00e29802d0a50832e01c7813d1accc0c617296fd6ef057  /mnt/system/system/vendor/etc/init/android.hardware.gatekeeper@1.0-service.rc
+77b3cb1253f3c113cc783d298a1e2dd603f14bc56fbe280f8f7b51aa1de37c9f  /mnt/system/system/vendor/etc/init/android.hardware.usb@1.0-service.rc
+73fb0ede02e0a9d809ec025422a828f5aabec4249a7e1a84d8865069d2534599  /mnt/system/system/vendor/etc/init/hw/init.msm.usb.configfs.rc
+a0f2b1ed429d6dc2b867615de5ecb07545ba839130d85769de61980ecc981f39  /mnt/system/system/vendor/etc/init/hw/init.qcom.rc
+fe828e5f29dfbb645ecb77f2e72370495b67265cf50fdb749306bc5d7ef259e1  /mnt/system/system/vendor/etc/init/hw/init.qcom.usb.rc
+2cabd2dce5a76ea68cd1ee66efd71b530cf22cd1425b6b099d5afbc30face534  /mnt/system/system/vendor/etc/init/hw/init.target.rc
+1d87445bd417283deb73534db6f559a77e1488b284749e333c725a80a0f18da3  /mnt/system/system/vendor/etc/init/hw/init.vendor.usb.rc
+f7d638a6c32b1231f437dcc9e3a31e6ddaa7ada67d9b419b1364e174905227eb  /mnt/system/system/vendor/etc/init/zz-fujisan-charger.rc
+1f384b70d68863407d66f2ba328b9b7729ab149b43bbb5d5f7da9e21f9221de2  /mnt/system/system/vendor/firmware/a530_zap.b00
+91c7c24b8605b0b3df0d925c6f6b2091369fab2e9b9696e1ee97eb4dc8eaf820  /mnt/system/system/vendor/firmware/a530_zap.b01
+bef98d709227d3a45d046439c1dc6a7af5ce607df6ba960f99417fb569f5700f  /mnt/system/system/vendor/firmware/a530_zap.b02
+666c9e95a4e28fba8482b155217e1cfa25ce23246653e5d16d116037891b7316  /mnt/system/system/vendor/firmware/a530_zap.elf
+e7d41d30e3d23af380207a71acb7a63868b5f6ea715e196867da24c972f9b04e  /mnt/system/system/vendor/firmware/a530_zap.mdt
+0b3aa6f8d4bc16645b26136dbc228f3a0fe503c01f54892f577715f61e3ef5a7  /mnt/system/system/product/app/GoogleCalendarSyncAdapter/GoogleCalendarSyncAdapter.apk
+5396a4ddf818f69a51d34a10ab23c8356add171ef2394f5bbca9e63b74594f4e  /mnt/system/system/product/app/GoogleContactsSyncAdapter/GoogleContactsSyncAdapter.apk
+5f0cc86a3fab53184d728c30a7e1c6c2530f791ffae6066b7d05bd30a82b7ebe  /mnt/system/system/product/app/MarkupGoogle_v2/MarkupGoogle_v2.apk
+3f65c5fb9da1e341590373497a520c18b286eb44946d0b1b6a8e588e6985acdb  /mnt/system/system/product/app/PrebuiltExchange3Google/PrebuiltExchange3Google.apk
+775a036508f6fd4607414cdcb200203ca872554ef948f2b96a56250e2c89e0e1  /mnt/system/system/product/app/SpeechServicesByGoogle/SpeechServicesByGoogle.apk
+db5d112394079902f800b4361fb7e44b81880f0cc2e8aeca561adaf0b01a4b0c  /mnt/system/system/product/app/talkback/talkback.apk
+4513efc5d1e2efe0619d1b3551a6016813a02beb862c849ef6d6e26f7335ea9c  /mnt/system/system/product/etc/default-permissions/default-permissions-google.xml
+250a22a5b0fd63140ae3842404d3ea85b5f390962d8350c96ff4b7ce4029a4f3  /mnt/system/system/product/etc/default-permissions/default-permissions-mtg.xml
+29e185019f9f244adc396e40e2ee1d482fd98d515f4aec9feacd6b685cab1a66  /mnt/system/system/product/etc/init/gapps.rc
+b3b530828259e81adffbd78cd64735afe65849f78dc2bb09b62e14b8ddef3244  /mnt/system/system/product/etc/permissions/com.google.android.dialer.support.xml
+52a29afb2c2657624a7e66f47b70a26ad503c1f5f107347980e9d8f6d5574605  /mnt/system/system/product/etc/permissions/privapp-permissions-google-product.xml
+ba124a28fed8760be03259311766556e29ac5ac766842362c571bf029071d356  /mnt/system/system/product/etc/permissions/privapp-permissions-mtg.xml
+1a78f5d70b87441c7d13384179e377f4f3105be25814eef05cd95d1b736775b9  /mnt/system/system/product/etc/security/fsverity/gms_fsverity_cert.der
+364372d5bb87bbf22b2628b14e2b56d521fb17ce27df804713c6fbea2eb2088c  /mnt/system/system/product/etc/sysconfig/d2d_cable_migration_feature.xml
+47612877a9484d9426a9964843016f0da34153f7f1446fbabcfba7e469790cd1  /mnt/system/system/product/etc/sysconfig/google-hiddenapi-package-allowlist.xml
+edf812885b78966b74f121d13d1ef7120aeab2b51211182b709bfb3c93b91330  /mnt/system/system/product/etc/sysconfig/google.xml
+1168d925f94032c7e464e225f8eda63f530bfae9d200630e4ed65bcc8bc2a9d3  /mnt/system/system/product/etc/sysconfig/sysconfig-mtg.xml
+eb737eb93ffa855638793cf898c9bb73dff81fa48fa0ecaf7707280a9f1b2753  /mnt/system/system/product/etc/sysconfig/wellbeing.xml
+584859f94fe2dd0c4aec65f514a990b6f4fc8290bfd7565e2fe036d761aee89e  /mnt/system/system/product/framework/com.google.android.dialer.support.jar
+41a39a7410dfe3e90d530aeca84cb4dfbe2c2e411ca7470cb32e93625a5f33e0  /mnt/system/system/product/lib64/libjni_latinimegoogle.so
+fd45182e1028bbfbdb2482d36804011bb26608d367c4cd23a33dad4a2a5f7d78  /mnt/system/system/product/overlay/GmsOverlay.apk
+4c51149c5b343ebf25c0c1c4482958baedadc487a7229aca344701c9de5a1bd8  /mnt/system/system/product/overlay/GmsSettingsOverlay.apk
+88c0c91905a2996a6b84b261d3a7e0e1f7343454aa680cc2ef4ee23836fb7532  /mnt/system/system/product/overlay/GmsSettingsProviderOverlay.apk
+e4dc1b95a10c2eca4b783d6c04875179e289e5232f01c64f0fb9668b79bd1109  /mnt/system/system/product/overlay/GmsSetupWizardOverlay.apk
+ccf1a6bac466b83e2c4fe16871ff536062598fba95deb98d7fcc1acf2b8469d9  /mnt/system/system/product/priv-app/AndroidAutoStub/AndroidAutoStub.apk
+2c454d2578686cd9c34670d038b4759d7cd2a8b79b0ae28fb629fb427285de58  /mnt/system/system/product/priv-app/FamilyLinkParentalControls/FamilyLinkParentalControls.apk
+25c27184482da38ea7ddc8b75488eaeb49e756dae1096ded20912092ea30c19b  /mnt/system/system/product/priv-app/GmsCore/GmsCore.apk
+e9fb81095b86cf2429040f45bf0be7f75481a30dbd5b80e26c9d3210a5ac7971  /mnt/system/system/product/priv-app/GooglePartnerSetup/GooglePartnerSetup.apk
+03a5ff1e45a4156bbd97d76cbfa40a5d8c210538e03d36a3f7a0b0a0ee07f67a  /mnt/system/system/product/priv-app/GoogleRestore/GoogleRestore.apk
+8ee254546102d2a6accf269abe62869c54b098e1ba54fd538a47d2f79b9991d2  /mnt/system/system/product/priv-app/Phonesky/Phonesky.apk
+59895254da4ac8cb7cf0bc379a226b8c78e1aa1fdc64d5b5ea5337916ac78440  /mnt/system/system/product/priv-app/Velvet/Velvet.apk
+9add03eb90ab2b9297f7669b2973d43e97cb58abd7d66e948a8e6481a5052545  /mnt/system/system/product/priv-app/Wellbeing/Wellbeing.apk
+9fa1a0cc067411bba99803e216db8485fe5b921771fa2b9bfeb0ea1d9ee0c805  /mnt/system/system/system_ext/etc/permissions/privapp-permissions-google-system-ext.xml
+6b2ecd2f310410bc368202e9d97ef7b443d7c02947c845dd351b04ec040683f3  /mnt/system/system/system_ext/priv-app/GoogleFeedback/GoogleFeedback.apk
+41c0d547ac1466e87ccf783e36192cacbda0f6010128327a2503b4330dc8b534  /mnt/system/system/system_ext/priv-app/GoogleServicesFramework/GoogleServicesFramework.apk
+ea8fffab89ca4ac161057d21b5abe0f9e6cd7bb2f9970df3173c02c23a21b8fd  /mnt/system/system/system_ext/priv-app/SetupWizard/SetupWizard.apk
+AXON_EXPECTED_SHA256
+[ ! -e '/mnt/system/system/product/priv-app/VelvetTitan' ]
+[ ! -L '/mnt/system/system/product/priv-app/VelvetTitan' ]
+[ ! -e '/mnt/system/system/system_ext/priv-app/Provision' ]
+[ ! -L '/mnt/system/system/system_ext/priv-app/Provision' ]
+check '/system/addon.d/30-gapps.sh' '755:0:0:2523' 'u:object_r:system_file:s0'
+ADDON=/mnt/system/system/addon.d/30-gapps.sh
+[ "$(head -c 120 "$ADDON" | sha256sum | cut -d ' ' -f 1)" = 523f18a4cd953147c484955cba2a43c3ae3bc0082fa14ed499098badd693f9c3 ]
+[ "$(tail -c 572 "$ADDON" | sha256sum | cut -d ' ' -f 1)" = 03c838be71e78175f271cbd264425d846bfdf4444ee4700b805ec425dac2601f ]
+[ "$(sed -n '11,46p' "$ADDON" | LC_ALL=C sort | sha256sum | cut -d ' ' -f 1)" = de01c5721ac654fc76f12f9e3315cbc79384a528fdabf5903cd149108b122bbd ]
+echo GAPPS_PAYLOAD_AND_RETAINED_FILES_VERIFIED
