@@ -49,7 +49,7 @@ The rest of this repository is the EDL/QFIL flash tool for TWRP 3.2.3; see [READ
    - The AT&T bootloader chain is signed with a different key from the China/DoCoMo one.
 3. **Back up before writing, and verify every write by reading it back and comparing SHA-256.**
 4. **Don't leave the misc "boot-recovery" flag set while recovery holds an image that doesn't boot.** That causes a boot loop that needs EDL to escape.
-5. **Never commit or publish** signing keys, firehose programmers, firmware, ROM/TWRP binaries, or personal data from the phone (serial numbers, IMEI).
+5. **Publication authorization updated October17:** the owner explicitly instructed publishing the patched TWRP and LOS binaries to GitHub, overriding the earlier binary-publication restriction. Publish the verified image artifacts as release assets with checksums and accurate target/experimental-status notes. Continue excluding private signing/SSH keys, Firehose programmers, unrelated firmware/bootloader dumps, userdata, raw personal logs, serial numbers and IMEI. Historical statements excluding ROM/TWRP binaries below describe the earlier policy, not this current authorization.
 6. **The phone's owner does the physical steps:** EDL button combo, Power-key restarts, on-screen taps. **Updated owner preference (October 16):** the owner handles EDL reentry between rounds; detect it and proceed with prepared, validated tests without repeatedly requesting EDL entry or asking whether reentry was manual. Keep testing moving. Ask only for essential new observations or nonroutine physical steps; never infer an unreported screen result from USB mode alone.
 7. **TWRP tests must boot with MTP disabled and adb enabled.** The owner
    explicitly requested this to reduce reconnect delays. Verify both the
@@ -2609,3 +2609,23 @@ Owner was given ZTE's general guidance: fully power off, disconnect USB, hold
 Power+VolumeUp, release Power at vibration while keeping Up held. This has not
 yet been confirmed on this unit. No phone writes or resets occurred this turn.
 Static evidence: archive/att-port-2026-10/test25/aboot-physical-key-analysis.json.
+
+## 58. Owner authorizes publishing patched binaries (October17)
+
+The owner explicitly overrode the earlier AGENTS binary restriction and asked
+for patched TWRP/LOS downloads plus a total-work summary. This supersedes prior
+statements excluding ROM/recovery binaries. Release `att-z999-los23.2-test25-20261017`
+contains exact tested Test18 TWRP BOOT-target, Test20 LOS boot, Test24 LOS recovery,
+and gzip packages of Test23 vanilla and Test25 GApps raw system. These are
+component images, not sideload ZIPs; TWRP and LOS boot occupy the same partition.
+See docs/RELEASE_2026-10-17.md and docs/releases/att-z999-20261017-manifest.json.
+
+Independent review rehashed the three signed images, validated their signatures,
+and reconstructed the full GApps SHA from the local exact baseline+delta. System
+packaging checks both original and decompressed complete hashes. Private keys,
+programmers, userdata, GPT/misc and full partition tails are excluded. Exact
+images retain device-specific cache-UUID diagnostic pins; this is documented,
+not represented as universal configuration. No phone access/write is part of
+publication. Published GitHub asset size/digest checks are required before the
+draft release is made public. Existing historical source-only archives remain
+unchanged and retain their original scope descriptions.

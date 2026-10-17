@@ -1,6 +1,6 @@
 # AT&T Axon M: LineageOS 23.2 port status
 
-Updated October 16, 2026. These results apply to one unlocked **AT&T Z999
+Updated October 17, 2026. These results apply to one unlocked **AT&T Z999
 (`fujisan`), eMMC, stock B37 firmware**. Test23 boots full Android 16 with both
 screens working. It is a diagnostic adaptation of the developer's published
 unofficial ROM, **not a production-ready release or a replacement firmware
@@ -250,3 +250,12 @@ The repository does not redistribute the ROM, patched images, proprietary
 firmware/programmers, signing keys, device identifiers, or private captures.
 Public hashes document provenance; they do not make the old one-device write
 plans safe to rerun on another phone.
+
+## Patched binary downloads
+
+The owner explicitly authorized publishing the tested patched images on
+October17. See the [release and total-work summary](RELEASE_2026-10-17.md) for
+TWRP, LOS boot/recovery, vanilla/GApps raw system packages, exact targets,
+checksums and limitations. This supersedes the earlier source-only publication
+policy; private keys, programmers, unrelated firmware dumps and userdata remain
+excluded.

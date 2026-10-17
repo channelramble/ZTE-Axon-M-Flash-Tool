@@ -1,0 +1,61 @@
+{
+  "schema": 1,
+  "release_tag": "att-z999-los23.2-test25-20261017",
+  "device": "AT&T ZTE Axon M Z999 (fujisan), eMMC, B37 firmware, unlocked bootloader",
+  "status": "experimental diagnostic port; hardware/security limitations in release notes",
+  "assets": [
+    {
+      "name": "twrp-3.7.0-fujisan-ATT-test18-BOOT-target.img",
+      "bytes": 26182707,
+      "sha256": "f9924f43f50689bb05982897f4410a4039f22284b068735fbf642b5592dcb9ba",
+      "format": "signed Android boot image v0",
+      "signature_target": "/boot",
+      "partition": "boot",
+      "hardware_boot_tested": true
+    },
+    {
+      "name": "lineage-23.2-fujisan-ATT-test20-boot.img",
+      "bytes": 13976627,
+      "sha256": "0651435c4575980f2a851bb1f47d59f4a72a1bb56ccebd56904886e8282991b6",
+      "format": "signed Android boot image v0",
+      "signature_target": "/boot",
+      "partition": "boot",
+      "hardware_boot_tested": true
+    },
+    {
+      "name": "lineage-23.2-fujisan-ATT-test24-recovery.img",
+      "bytes": 26625079,
+      "sha256": "cb56783c82110e2bc6a9356999f7e4197a5cb56167087dc06e8b9cfc955d43e5",
+      "format": "signed Android boot image v0",
+      "signature_target": "/recovery",
+      "partition": "recovery",
+      "hardware_boot_tested": true
+    },
+    {
+      "name": "lineage-23.2-fujisan-ATT-test23-system-vanilla.img.gz",
+      "bytes": 1159571522,
+      "sha256": "f46ad046bcfcde06eb5c84a2baf66cefc2b26a82e7fd3d5227aca703f76be665",
+      "format": "gzip-compressed raw ext4 system image (not Android sparse, not sideload ZIP)",
+      "partition": "system",
+      "uncompressed_bytes": 6979321856,
+      "uncompressed_sha256": "33db1d4d4e5e49f5dc1c06cbd6a0e39b07fd9b6d886941e33f165b7876fccc5a",
+      "decompression_verified": true
+    },
+    {
+      "name": "lineage-23.2-fujisan-ATT-test25-system-gapps.img.gz",
+      "bytes": 1467198179,
+      "sha256": "8e572f61ebcae49d51d2c1606cee7ce719d46d78b7fc0f68e0e1673efb842507",
+      "format": "gzip-compressed raw ext4 system image (not Android sparse, not sideload ZIP)",
+      "partition": "system",
+      "uncompressed_bytes": 6979321856,
+      "uncompressed_sha256": "257967d70da94070625fbc0dfee0880929f0d8a282b9986c72e71e29fd2b4d36",
+      "decompression_verified": true
+    }
+  ],
+  "system_selection": "Choose vanilla OR GApps; both use the Test20 LOS boot and Test24 LOS recovery. TWRP is an optional BOOT-slot alternative.",
+  "userdata_included": false,
+  "private_keys_included": false,
+  "firmware_programmer_included": false,
+  "device_specific_diagnostic_cache_uuid_pins_present": true,
+  "source_rom_sha256": "d9b4caca37dc906c4f9b4700bc8d24fe6fe5757e8eeba7c45fe2c55143883456"
+}
