@@ -2629,3 +2629,13 @@ not represented as universal configuration. No phone access/write is part of
 publication. Published GitHub asset size/digest checks are required before the
 draft release is made public. Existing historical source-only archives remain
 unchanged and retain their original scope descriptions.
+
+**Publication completed October17 07:24 UTC.** Public prerelease
+`att-z999-los23.2-test25-20261017` contains all eight intended assets. GitHub's
+reported sizes and SHA-256 digests match the five binary packages and three
+metadata files. Anonymous release lookup and checksum download also passed.
+Receipt: docs/releases/att-z999-20261017-publication.json. After MacBook SSH
+became unavailable, both gzip systems were reconstructed from the verified local
+Test23 baseline and Test25 changed-block archive; their complete compressed
+hashes exactly matched the already verified MacBook packages before streaming
+to GitHub. No phone access or writes occurred during publication.

@@ -1,0 +1,69 @@
+{
+  "verified_at": "2026-10-17T07:24:13.845441+00:00",
+  "release_url": "https://github.com/channelramble/ZTE-Axon-M-Flash-Tool/releases/tag/att-z999-los23.2-test25-20261017",
+  "release_id": 415650066,
+  "tag": "att-z999-los23.2-test25-20261017",
+  "draft": false,
+  "prerelease": true,
+  "published_at": "2026-10-17T07:24:09Z",
+  "all_asset_sizes_and_sha256_match": true,
+  "assets": [
+    {
+      "id": 649845613,
+      "name": "lineage-23.2-fujisan-ATT-test20-boot.img",
+      "size": 13976627,
+      "digest": "sha256:0651435c4575980f2a851bb1f47d59f4a72a1bb56ccebd56904886e8282991b6",
+      "browser_download_url": "https://github.com/channelramble/ZTE-Axon-M-Flash-Tool/releases/download/att-z999-los23.2-test25-20261017/lineage-23.2-fujisan-ATT-test20-boot.img"
+    },
+    {
+      "id": 649850088,
+      "name": "lineage-23.2-fujisan-ATT-test23-system-vanilla.img.gz",
+      "size": 1159571522,
+      "digest": "sha256:f46ad046bcfcde06eb5c84a2baf66cefc2b26a82e7fd3d5227aca703f76be665",
+      "browser_download_url": "https://github.com/channelramble/ZTE-Axon-M-Flash-Tool/releases/download/att-z999-los23.2-test25-20261017/lineage-23.2-fujisan-ATT-test23-system-vanilla.img.gz"
+    },
+    {
+      "id": 649845610,
+      "name": "lineage-23.2-fujisan-ATT-test24-recovery.img",
+      "size": 26625079,
+      "digest": "sha256:cb56783c82110e2bc6a9356999f7e4197a5cb56167087dc06e8b9cfc955d43e5",
+      "browser_download_url": "https://github.com/channelramble/ZTE-Axon-M-Flash-Tool/releases/download/att-z999-los23.2-test25-20261017/lineage-23.2-fujisan-ATT-test24-recovery.img"
+    },
+    {
+      "id": 649850144,
+      "name": "lineage-23.2-fujisan-ATT-test25-system-gapps.img.gz",
+      "size": 1467198179,
+      "digest": "sha256:8e572f61ebcae49d51d2c1606cee7ce719d46d78b7fc0f68e0e1673efb842507",
+      "browser_download_url": "https://github.com/channelramble/ZTE-Axon-M-Flash-Tool/releases/download/att-z999-los23.2-test25-20261017/lineage-23.2-fujisan-ATT-test25-system-gapps.img.gz"
+    },
+    {
+      "id": 649845614,
+      "name": "release-manifest.json",
+      "size": 2651,
+      "digest": "sha256:b4b67641c7be8b1f389c7ef95d859f649f7abe4be286d9c352977223f2af878e",
+      "browser_download_url": "https://github.com/channelramble/ZTE-Axon-M-Flash-Tool/releases/download/att-z999-los23.2-test25-20261017/release-manifest.json"
+    },
+    {
+      "id": 649845612,
+      "name": "RELEASE_NOTES.md",
+      "size": 9438,
+      "digest": "sha256:0dbeb69a7c9081c281abe555fc2a4fe47cbfcf7711855af2e3e3da4f4217677b",
+      "browser_download_url": "https://github.com/channelramble/ZTE-Axon-M-Flash-Tool/releases/download/att-z999-los23.2-test25-20261017/RELEASE_NOTES.md"
+    },
+    {
+      "id": 649845628,
+      "name": "SHA256SUMS",
+      "size": 739,
+      "digest": "sha256:10e0948de17217f226e0292d5404728c1a9b2bd790a28b25c6b094b704f43dc9",
+      "browser_download_url": "https://github.com/channelramble/ZTE-Axon-M-Flash-Tool/releases/download/att-z999-los23.2-test25-20261017/SHA256SUMS"
+    },
+    {
+      "id": 649845611,
+      "name": "twrp-3.7.0-fujisan-ATT-test18-BOOT-target.img",
+      "size": 26182707,
+      "digest": "sha256:f9924f43f50689bb05982897f4410a4039f22284b068735fbf642b5592dcb9ba",
+      "browser_download_url": "https://github.com/channelramble/ZTE-Axon-M-Flash-Tool/releases/download/att-z999-los23.2-test25-20261017/twrp-3.7.0-fujisan-ATT-test18-BOOT-target.img"
+    }
+  ],
+  "anonymous_release_and_checksum_download_verified": true
+}
