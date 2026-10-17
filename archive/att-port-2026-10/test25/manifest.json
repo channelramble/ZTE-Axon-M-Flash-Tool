@@ -209,6 +209,14 @@
       "published_sha256": "379ce3502a4c976a2762209fcf68bbdbba003b4330d65bc8e1103b9c921713a7",
       "published_bytes": 4767,
       "transformations": []
+    },
+    {
+      "source": "aboot-physical-key-analysis.json",
+      "public_path": "aboot-physical-key-analysis.json",
+      "source_sha256": "6fc96007bb808a0098906a3ef53e47b4960337840e8b18cddd7031de0161c8f3",
+      "published_sha256": "6fc96007bb808a0098906a3ef53e47b4960337840e8b18cddd7031de0161c8f3",
+      "published_bytes": 4193,
+      "transformations": []
     }
   ]
 }

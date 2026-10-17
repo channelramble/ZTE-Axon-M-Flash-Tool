@@ -10,8 +10,9 @@ Notes for AI coding agents (and people) continuing the effort to run the unoffic
   it is flashed with full readback verified; native recovery boot and the
   owner-requested factory reset are now verified (section56).
   Menu/PMIC routing remains separate.
-  GApps is requested and staged; the owner has now explicitly approved
-  erasing current apps/settings/files after recovery validation (section56).
+  GApps is installed and fully verified after the owner-approved reset.
+  Owner confirms LineageOS and recovery both boot (sections56–57).
+  Direct Volume Up entry still needs investigation.
   See sections54–55 before any write or reset.
 - **Working recovery controls (October16): Test18 TWRP3.7 and Test19 LOS23.2**
   boot with adb on their own4.4 kernels. Test06 TWRP3.2.3/3.18 is the older
@@ -2575,3 +2576,36 @@ returned local-verification receipt is saved in remote test25-after. No userdata
 backup exists. The temporary511MB ZIP was removed from the phone after its
 journal capture; cache was cleanly unmounted and BCB remains zero. Owner was
 asked to select Reboot system now. First Android startup is pending.
+
+## 57. Owner confirms post-GApps Android and recovery boot (October16)
+
+Owner reports: “boots to recovery and lineage os just fine,” but says the START
+menu is needed and Volume Up does not seem to enter recovery. Treat this as
+successful owner-observed boots, not a completed ADB Google-package/runtime
+validation. The phone is currently in native Test24 recovery: exact executable
+hash, recovery bootmode, adb-only USB and zero BCB are verified in the read-only
+`test25-recovery-key-route` capture on both Macs. No writes or resets were sent.
+
+Do not conflate three bootloader entry paths: the START menu Recovery action
+uses PMIC reboot reason1; normal boot can honor misc boot-recovery; physical
+Volume Up is sampled early by aboot. The exact AT&T bootloader is being reviewed
+for that physical-key branch. No failed key timing or root cause is yet proved.
+Root asked whether the owner used Power+VolumeUp from fully off or VolumeUp
+during startup. Preserve the working images; no bootloader replacement or
+additional format is warranted by this report.
+
+**Physical-key route and factory-mode flag checked.** Exact AT&T aboot samples
+Up(key0x115) held with Down(key0x116) released at0x9183dc54–70. Its normal branch
+directly selects recovery. Persistent bootmode=1 instead makes Up exit factory
+mode. The literal key is `bootmode`, not the analyst label _LMP. The table is
+ztecfg p16 byte4096 length4096 (partition start917504,1024 sectors). Root verified
+GPT and the literal, then read only that table through native recovery. Exactly
+one record has valid header/signature and value0, ruling out current FTM
+diversion. Other configuration values were not retained or published.
+
+An earlier PMIC power-off-reason branch can bypass key sampling; no current
+trace proves it did. Key timing and USB-powered startup remain unresolved.
+Owner was given ZTE's general guidance: fully power off, disconnect USB, hold
+Power+VolumeUp, release Power at vibration while keeping Up held. This has not
+yet been confirmed on this unit. No phone writes or resets occurred this turn.
+Static evidence: archive/att-port-2026-10/test25/aboot-physical-key-analysis.json.

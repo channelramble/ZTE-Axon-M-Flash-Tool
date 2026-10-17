@@ -1,0 +1,58 @@
+{
+  "source_sha256": "87bb01570c58e8b1c29f4b75cedba22b20f7efc2ca74feec566beb21094ded04",
+  "source_bytes": 1048576,
+  "analysis_only": true,
+  "phone_operations": false,
+  "bootloader_modified": false,
+  "conclusion": "The AT&T bootloader contains an early Volume-Up-only recovery selection path. Current evidence does not establish why the owner missed it; cold-key timing, early power-reason bypass and stored factory-mode state are distinct from menu/BCB routing.",
+  "findings": [
+    {
+      "kind": "physical-key sample",
+      "evidence": "At0x9183dc54..0x9183dc70 key0x115 must be pressed and0x116 released. Native string0x9187bd2c names this Volume Up. Helper0x9184479c returns a bit from the key-state bitmap. Both keys/neither follow the no-key route; this is an early sample, not a later menu key handler."
+    },
+    {
+      "kind": "normal Up route",
+      "evidence": "At0x9183de54..0x9183df10, selector0x918951dc==0 makes Up set the actual recovery flag0x918a2d74 directly. The same flag selects recovery GPT partition and /recovery verifier target."
+    },
+    {
+      "kind": "factory-mode exception",
+      "evidence": "Immediately preceding sample,0x9183dc18/DC1c supplies literal bootmode atVA0x91876870 to integer getter0x918373c8. If retrieved value!=1 selector0x918951dc is cleared. If value==1 Up instead sets is_keyquit_ftm_pressed=1/is_keyenter_ftm_pressed=0; downstream0x91839ac8..0x91839b08 logs NORMAL and saves bootmode0. This is not an unlock/security flag."
+    },
+    {
+      "kind": "early bypass",
+      "evidence": "Nonzero return from0x918320d0 at0x9183db64..0x9183db6c skips the stored-mode/key sample and PMIC reboot-reason read. Helper inspects PMIC power-off reason registers0x80c/0x80d plus0x80a/0x80b condition, including values0x20/0x80. No current hardware values or path trace available."
+    },
+    {
+      "kind": "menu route distinct",
+      "evidence": "Menu Recovery dispatch0x91811028 calls reboot(1)0x918321a0, storing PMIC reason bits for next entry; Start action0x91811088 calls reboot(0). This does not establish that a cold-held Up was sampled."
+    },
+    {
+      "kind": "BCB route distinct and tested",
+      "evidence": "Normal loader0x9183dbf8 invokes eMMC BCB reader0x9183f748. Exact command boot-recovery sets0x918a2d74 independently of PMIC reason; native recovery clears BCB. Test22/Test24 actual-slot recovery and clear were separately verified by root."
+    }
+  ],
+  "stored_bootmode": {
+    "literal_key": "bootmode",
+    "literal_va": "0x91876870",
+    "literal_file_offset": "0x7e870",
+    "partition": "ztecfg",
+    "partition_index": 16,
+    "start_sector": 917504,
+    "sectors": 1024,
+    "table_byte_offset": 4096,
+    "table_bytes": 4096,
+    "table_absolute_sector": 917512,
+    "table_sector_count": 8,
+    "read_evidence": "0x918374a0 locates GPT literal ztecfg0x91879e00;0x918374ec adds4096;0x918374f8 sets read count4096;0x918374fc calls storage read.",
+    "record_layout": "32 records,128B each. NUL-terminated header+0=this-is-cfg-head; key+32; signature+64=cfg-signature-is-here; ASCII integer value+96. Getter0x91837108 finds first valid matching record;0x918373f8..0x91837404 parses value.",
+    "local_backup_result": "No ztecfg file in original backup set or private filename inventory; no stored bootmode value claimed. Fresh misc does not cover this separate partition.",
+    "naming_note": "_LMP was an analyst label for state, not the literal key passed by this aboot."
+  },
+  "safe_next_diagnostic": "First clarify whether Volume Up was held before pressing Power from a fully off, USB-disconnected state, or only after startup/Start appeared. Root can optionally read the exact4KiB ztecfg table read-only and report only a validated bootmode integer. Do not alter it. Distinguish early-key result from later menu selection and record resulting screen/bootmode; do not infer failure from the warning/Start screen alone.",
+  "limits": [
+    "No current bootloader trace, key bitmap or PMIC register values.",
+    "No claim that every power-on reaches the early key sample.",
+    "Correct cold-key sequence still awaits owner observation.",
+    "No bootloader or partition patch recommended."
+  ]
+}

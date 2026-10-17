@@ -25,7 +25,10 @@ BCB recovery request; diagnostic command-line arguments suppressed processing
 of the requested operation. Test24 recovery removes that restriction
 and restores cache/data access. Full readback, native recovery boot, a RAM-only
 formatter compatibility test, and the owner-approved factory reset all passed. The bootloader's
-Recovery choice remains a separate unresolved route. See AGENTS section54.
+Recovery choice and direct button entry remain distinct from image validity.
+The owner now reports both images boot using START, while Volume Up entry does
+not seem to work. Its exact key sequence is not yet established. See AGENTS
+sections54 and57.
 
 The Test20 installation used an explicitly approved clean F2FS format. Test22
 and Test23 preserved that userdata. The later GApps installation used a new,
@@ -136,14 +139,25 @@ After explicit owner approval, the recovery UI formatted data as F2FS and cache
 as ext4 and reported success. Fresh logs and cleared BCB verify that reset.
 No userdata backup was made, following the owner’s preference.
 
+The exact AT&T bootloader has a separate early Volume-Up-only recovery route.
+A stored factory-test flag could divert it; a targeted read-only check found
+its current `ztecfg` `bootmode` value is0 with valid record markers, ruling out
+that exception now. Key timing and an early PMIC power-reason bypass remain
+unproven. No bootloader or configuration was changed. ZTE documents holding
+Power+Volume Up from fully off,
+[releasing Power at vibration](https://support.ztedevices.com/en-us/how-to-enter-the-recovery-mode/),
+with [USB disconnected](https://support.ztedevices.com/en-gl/how-to-enter-and-exit-the-recovery-mode/).
+This general guidance is not yet a confirmed result on this unit.
+
 ## GApps installation
 
 The owner requested Google apps. Official
 [MindTheGapps Android 16 ARM64, September 15 release](https://github.com/MindTheGapps/16.0.0-arm64/releases/tag/MindTheGapps-16.0.0-arm64-20260915_222150)
 is installed after a verified native factory reset. All 36 Google payload files
 and 27 retained AT&T patch/firmware files passed hash, size, owner, mode and label
-checks, together with the generated addon.d script. **First Android boot with
-GApps is pending** at this checkpoint. Package size is 511,299,883 bytes, SHA-256
+checks, together with the generated addon.d script. The owner confirms both **LineageOS and recovery boot successfully** afterward.
+Direct ADB verification of Google package registration is still pending because
+the phone is currently in recovery. Package size is 511,299,883 bytes, SHA-256
 `d60f550e4dc96606644fbbf886a9892d1391a607225e861ceaef27bd999bc6a3`.
 Complete post-install system readback and a separate on-phone SHA agree.
 Boot, recovery, misc and both GPT copies are unchanged. The full resulting
