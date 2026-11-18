@@ -1,4 +1,4 @@
-# Flashing the AT&T Z999 from macOS (no Windows / QFIL)
+# Flashing the Axon M from macOS (EDL)
 
 This is a macOS-native walkthrough for installing the AT&T-patched LineageOS 23.2
 images on a **ZTE Axon M, AT&T `Z999` / `P996A25` / `fujisan`** with a **locked**
